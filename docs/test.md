@@ -22,11 +22,3 @@ syscall --> VFS
 
 ---
 
-## 示例代码
-
-```c
-int main()
-{
-    return 0;
-}
-```
