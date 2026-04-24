@@ -725,7 +725,7 @@ submit_bio()
     │
     ▼
 ┌ - - - - - - - - - - - - - - - - - - - - ┐
-| BLOCK LAYER（概要块，细节见下文“稍后展开”） |
+| BLOCK LAYER（概要块，细节见下一个流程图）  |
 └ - - - - - - - - - - - - - - - - - - - - ┘
     │
     ▼
@@ -738,7 +738,7 @@ driver 回调（queue_rq，例如 nvme_queue_rq）
 硬件设备（SSD / HDD / 虚拟磁盘）
 ```
 
-下面单独展开 BLOCK LAYER 内部流程：
+BLOCK LAYER是内核里把“文件系统的块读写请求”统一转换、调度并提交给具体设备驱动的一层。下面单独展开 BLOCK LAYER 内部流程：
 ```text
 submit_bio()
     │
