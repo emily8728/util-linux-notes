@@ -968,28 +968,10 @@ inode = d_inode(path.dentry); /* inode 属于 ext4 */
 ```
 
 ## 6. mount namespace
-`mount namespace` 是一棵独立的 mount tree。namespace 相关操作，本质是对 mount 树及其根节点、可见范围、传播关系的管理。
+`mount namespace` 用来隔离进程看到的挂载视图：进程访问 `/`、`/proc`、`/mnt`、`/sys` 等路径时，结果不是全局唯一的一份挂载关系，而是由它所在的 `mount namespace` 决定。不同 namespace 可有不同挂载关系，因此两个进程即使访问同一路径字符串，也可能看到不同内容。
 
-namespace 结构：
-```c
-struct mnt_namespace {
-    ...
-    struct mount *root;
-};
-```
-含义：每个 namespace 都有一个 `root mount`，作为整棵 mount tree 的起点。
-
-关系：
-```text
-mnt_namespace
-    ↓
- root mount
-    ↓
- mount tree
-    ↓
- 多个 mount 对象
-```
 例如：
+
 ```text
 namespace A
 /
@@ -1003,34 +985,89 @@ namespace B
 ├── /sys
 └── /mnt → overlayfs
 ```
-两个 namespace 中，`mount` 结构可以不同，但路径字符串可以相同。
 
-不同进程看到的文件系统结构可以不同。每个进程属于某个 mount namespace，但进程并不直接持有 namespace，而是持有 `struct path(root/pwd)`；该 `path` 中的 `mnt` 属于某个 namespace 的 mount tree：
+两个进程都访问 `/mnt`：在 namespace A 中 `/mnt` 可能是 ext4；在 namespace B 中可能是 overlayfs。
+
+因此，`mount namespace` 隔离的不是 inode、dentry、`super_block` 或磁盘本身，而是进程看到的挂载视图。
+
+内核里，一个 `mount namespace` 关联一棵 mount tree。简化示意：
+
+```c
+/* 简化：只保留理解 mount namespace 所需的核心字段 */
+struct mnt_namespace {
+    struct mount *root;   /* 该 namespace 中 mount tree 的根 mount */
+};
+```
+
+```text
+struct mnt_namespace
+        │
+        ▼
+   struct mount *root          ← 该 namespace 内 mount tree 的入口（树顶）
+        │
+        ├──► struct mount（子节点）
+        └──► struct mount（子节点）
+                 └──► …
+```
+
+在此基础上，每个进程既关联某个 mount namespace，也持有自己的文件系统上下文 `fs_struct`：
+
 ```c
 struct task_struct {
+    struct nsproxy   *nsproxy;
     struct fs_struct *fs;
 };
+```
 
+`nsproxy->mnt_ns` 表示当前进程使用哪棵 mount tree（简化，仅保留与 mount namespace 相关部分）：
+
+```c
+struct nsproxy {
+    struct mnt_namespace *mnt_ns;
+};
+```
+
+`fs_struct` 给出路径解析起点：
+
+```c
 struct fs_struct {
     struct path root;
     struct path pwd;
 };
-
-struct path {
-    struct vfsmount *mnt;
-    struct dentry   *dentry;
-};
 ```
-关键点：进程不是直接指向 namespace，而是 `进程 -> fs_struct -> path(root/pwd)`；`path` 里包含 `mnt` 和 `dentry`，其中 `mnt` 属于某个 namespace。
 
-因此路径解析从该 `path` 开始，解析结果由该 namespace 决定。路径解析起点：
+- `root`：当前进程视角下的 `/`
+- `pwd`：当前工作目录
+
+路径解析时：
+
 ```c
 if (pathname[0] == '/')
     nd->path = current->fs->root;
 else
     nd->path = current->fs->pwd;
 ```
-即：`lookup` 起点 = 当前进程看到的 `root` 或 `cwd`。
+
+即：绝对路径从 `current->fs->root` 开始；相对路径从 `current->fs->pwd` 开始。
+
+`struct path` 表示某个 mount 中的某个目录位置：
+
+```c
+struct path {
+    struct vfsmount *mnt;
+    struct dentry   *dentry;
+};
+```
+
+因此要注意：**路径 lookup 的起点**并不是 `namespace->root`，而是 `fs_struct` 里的 `root` / `pwd` 这一对 `path`（即进程视角下的根与工作目录）。
+
+顺带一提：`mnt_namespace` 所关联的 mount tree 根节点（`mnt_namespace->root` 一类语义）描述的是该 namespace 内的整棵挂载树如何组织与管理，常见用途包括：
+
+- 维护该 namespace 内的挂载拓扑（mount tree 的组织与变更）；
+- 在该 namespace 内遍历 mount tree（枚举、查找挂载关系）；
+- 处理挂载传播（propagation）相关语义；
+- 参与 namespace 的 clone / destroy（与挂载视图的生命周期绑定）；
+- 通过 `/proc/.../mountinfo` 等接口向用户态导出当前挂载视图。
 
 # 三. super_block 与 mount 的整体关系
 简单来说，mount 命令在内核里做的事情是：先建立文件系统实例 `super_block`，再建立挂载点实例 `mount`，然后把 `super_block` 和 `mount` 关联起来，也就是把文件系统挂载到挂载点上。所以，一个 `super_block` 可以对应多个 `mount`。
