@@ -303,10 +303,26 @@ static struct file_system_type ext4_fs_type = {
 ```c
 struct dentry *s_root;
 ```
-它保存该文件系统实例的根 dentry。这个对象：
-- 在 mount 时建立（`s_root` 是该 super_block 对应文件系统实例的根 dentry，第二章中的 `mnt_root` 通常引用它）
-- 在整个 mount 生命周期存在
-- 被 mount / namespace / path 解析使用
+它保存该文件系统实例的根 dentry，在初始化 `super_block` 时建立。下面的 C 代码是 **`ext4_fill_super()`** 中的示意片段（**`ext4_fill_super()`** 在 **§2「super_block 的建立和初始化」** 中已有说明）：
+
+```c
+//示意，非逐字摘录
+root_inode = ext4_iget(sb, EXT4_ROOT_INO);
+sb->s_root = d_make_root(root_inode);
+if (!sb->s_root)
+    return -ENOMEM;
+```
+
+对应关系：
+
+1. **`ext4_iget(sb, EXT4_ROOT_INO)`**  
+   从磁盘上的 ext4 实例读出根 inode，在内存里得到 `struct inode`。
+
+2. **`d_make_root(root_inode)`**  
+   为该 inode 创建根 dentry（`struct dentry`）。
+
+3. **`sb->s_root = …`**  
+   把上述根 dentry 记入 `super_block->s_root`，供后续路径解析与 `mnt_root` 等引用。
 
 ### 3.3 s_op —— 文件系统的操作函数
 const struct super_operations *s_op 负责文件系统实例级（super_block级）行为，以及 inode 对象在内存中的生命周期管理和回写控制。
@@ -812,10 +828,22 @@ struct ext4_sb_info {
 ```c
 // 只列出和文中所讲相关主要字段
 struct mount {
-    struct hlist_node mnt_hash;     
-    struct mount *mnt_parent;         //父mount
-    struct dentry *mnt_mountpoint;    //挂载点dentry
-    struct vfsmount mnt;              //见下一个结构体
+    struct hlist_node mnt_hash;          // mount hash 节点：用于 (parent_mount, mountpoint_dentry) -> child mount 查找
+
+    struct mount *mnt_parent;            // 父 mount（mount tree 拓扑关系）
+    struct dentry *mnt_mountpoint;       // 当前 mount 挂载到父 mount 时对应的 mountpoint dentry
+
+    struct vfsmount mnt;                 // 对外暴露的 vfsmount 结构（见下一个结构体）
+
+    /* propagation（挂载传播）相关字段 */
+    struct list_head  mnt_share;         // shared peer group 链表（shared mounts 互相连接）
+    struct hlist_head mnt_slave_list;    // 当前 mount 作为 master 时，其 slave mounts 链表头
+    struct hlist_node mnt_slave;         // 当前 mount 作为 slave 时，挂入 master->mnt_slave_list 的节点
+    struct mount      *mnt_master;       // 当前 slave mount 对应的 master mount
+    int               mnt_group_id;      // shared peer group 的 group id
+    int               mnt_t_flags;       // mount 内部拓扑/propagation 相关 flags
+
+    struct mnt_namespace *mnt_ns;        // 当前 mount 所属的 mount namespace
 };
 struct vfsmount {
     struct dentry *mnt_root;         //该mount的根dentry
@@ -880,8 +908,196 @@ hlist_for_each_entry(mnt, bucket, mnt_hash) {
         mnt->mnt_mountpoint == mountpoint)
         return mnt;
 }
- ```           
-## 5. mount 在路径解析中的作用
+```
+
+## 5. mount propagation related fields
+
+**mount propagation** 描述的是：多棵 **mount tree** 之间，要不要把后续的 mount / unmount 事件再同步过去。
+
+典型问题包括：
+
+- clone 出新的 **mount namespace** 之后，宿主机上新增的 mount，要不要反映到新的 namespace 里？
+- `bind` / `rbind` 把两棵树拴在一起之后，一侧的 mount / unmount，另一侧是否还要继续跟着变？
+
+内核用 **mount propagation** 这一套策略来回答：哪些 mount 结点之间**互相**、或**单向**同步挂载事件。
+
+### 5.1 四种传播类型
+
+常用类型如下（可用 `mount --make-*` 调整挂载点或子树的策略）：
+
+| 类型 | 含义 |
+|------|------|
+| shared | 双向传播 |
+| slave | 单向接收传播 |
+| private | 完全不传播 |
+| unbindable | 不允许再被 bind mount |
+
+```bash
+mount --make-shared /path
+mount --make-slave /path
+mount --make-private /path
+mount --make-unbindable /path
+```
+
+以下按类型说明。
+
+#### shared
+
+`mount --make-shared /mnt` 之后，`/mnt` 一侧的 mount 成为 **shared mount**：落在同一 **peer group** 里的 mount 之间，会互相转发「子树里新增 / 拆掉 mount」这类变化。
+
+**peer group** 可理解为一组 **mutually shared** 的 mount：`/proc/self/mountinfo` 里形如 `shared:17` 的标记，就与这种分组有关。
+
+示意：
+
+```text
+mount A : shared:17
+mount B : shared:17
+→ A 与 B 在同一 peer group：A 下新增 mount 会传到 B，反之亦然。
+```
+
+#### slave
+
+**slave** 只**接收**来自 **master** 的传播，**不**把本侧变化回传。
+
+```text
+A (master)
+  ↓
+B (slave)
+```
+
+容器里常见：宿主或上层 mount 树为 master，容器内子树为 slave。
+
+#### private
+
+**private** 不参与传播：既不接收外部事件，也不向其它 mount 播本 subtree 的变化，是最「隔绝」的一种。
+
+```bash
+mount --make-private /mnt
+```
+
+之后 `/mnt` 子树下的 mount 变化不会外传，也不会从外面接收传播。
+
+#### unbindable
+
+**unbindable** 表示该 mount **不允许**再被 bind 到别处（避免某些拓扑下形成难以拆开的绑定关系）；与 `T_UNBINDABLE` 等标志对应，详见下一小节。
+
+### 5.2 与 propagation 相关的 `struct mount` 字段
+
+`struct mount` 中与传播相关的成员可概括为：
+
+1. **`mnt_group_id`**  
+   shared **peer group** 的编号；`/proc/self/mountinfo` 里 `shared:X` 一类语义与此对应。
+
+2. **`mnt_share`**  
+   把同一 peer group 里的 shared mount 串成链表，是 shared 拓扑的核心链表之一。
+
+3. **`mnt_slave_list` / `mnt_slave` / `mnt_master`**  
+   当前 mount 作为 **master** 时，用 `mnt_slave_list` 挂住其 **slave**；当前 mount 作为 slave 时，用 `mnt_slave` 挂入 `master->mnt_slave_list`，并用 `mnt_master` 指回 master。
+
+4. **`mnt_t_flags`**  
+   保存传播相关标志（如 `T_SHARED`、`T_UNBINDABLE` 等）。示意（非完整枚举）：
+
+```c
+enum {
+    T_SHARED           = 1, /* mount is shared */
+    T_UNBINDABLE       = 2, /* mount is unbindable */
+    T_MARKED           = 4,
+    T_UMOUNT_CANDIDATE = 8,
+};
+```
+
+**与 §5.1 四种传播类型的大致对应：**
+
+- **shared**：`mnt_t_flags` 含 `T_SHARED`，有 `mnt_group_id`，并参与 `mnt_share` 链表。
+- **slave**：`mnt_master` 指向 master，`mnt_slave` 挂在 `master->mnt_slave_list` 上。
+- **private**：不参与 shared peer group，无上述 slave/master 传播关系。
+- **unbindable**：`mnt_t_flags` 含 `T_UNBINDABLE`。
+
+
+## 6. mnt_ns
+**`mnt_ns`**，类型为 `struct mnt_namespace *`，表示**这个 mount 结点登记在哪个 mount namespace 里**（创建/切换时常说 `CLONE_NEWNS`；与 pid、net 等其它 namespace 不是一类东西）。
+
+**mount namespace** 用来隔离进程看到的挂载关系：不同 mount namespace 可有不同挂载关系，因此两个进程即使访问同一路径字符串，也可能看到不同内容。
+
+例如：
+
+```text
+mount namespace A
+/
+├── /proc
+├── /sys
+└── /mnt → ext4
+
+mount namespace B
+/
+├── /proc
+├── /sys
+└── /mnt → overlayfs
+```
+
+两个进程都访问 `/mnt`：在 mount namespace A 中 `/mnt` 可能是 ext4；在 mount namespace B 中可能是 overlayfs。
+
+因此，**mount namespace** 隔离的不是 inode、dentry、`super_block` 或磁盘本身，而是进程看到的挂载视图。
+
+内核里，一个 mount namespace（`struct mnt_namespace`）关联一棵 mount tree，对应关系如下（结构体为示意字段）：
+
+```c
+/* 简化：只保留理解 mount namespace（struct mnt_namespace）所需的核心字段 */
+struct mnt_namespace {
+    struct mount *root;   /* 该 mount namespace 中 mount tree 的根 mount */
+};
+```
+
+```text
+struct mnt_namespace
+    │
+    ▼
+struct mount *root   ← 该 mount namespace 内 mount tree 的入口（树顶）
+    │
+    ├──► struct mount
+    └──► struct mount
+            └──► …
+```
+
+在此基础上，每个进程既关联某个 mount namespace，也持有自己的文件系统上下文 `fs_struct`：
+
+```c
+struct task_struct {
+    struct nsproxy   *nsproxy;
+    struct fs_struct *fs;
+};
+```
+
+`nsproxy->mnt_ns` 表示当前进程使用哪棵 mount tree（简化，仅保留与 mount namespace 相关部分）：
+
+```c
+struct nsproxy {
+    struct mnt_namespace *mnt_ns;
+};
+```
+
+`fs_struct` 给出路径解析起点：
+
+```c
+struct fs_struct {
+    struct path root;
+    struct path pwd;
+};
+```
+
+- `root`：当前进程视角下的 `/`
+- `pwd`：当前工作目录
+
+路径解析时：
+
+```c
+if (pathname[0] == '/')
+    nd->path = current->fs->root;
+else
+    nd->path = current->fs->pwd;
+```
+
+即：绝对路径从 `current->fs->root` 开始；相对路径从 `current->fs->pwd` 开始。
 VFS 在解析路径时，本质始终维护一个当前 `path = (mnt, dentry)`：
 ```c
 struct path {
@@ -967,105 +1183,13 @@ path.dentry = child; /* path = (ext4_mnt, "a.txt") */
 inode = d_inode(path.dentry); /* inode 属于 ext4 */
 ```
 
-## 6. mount namespace
-`mount namespace` 用来隔离进程看到的挂载视图：进程访问 `/`、`/proc`、`/mnt`、`/sys` 等路径时，结果不是全局唯一的一份挂载关系，而是由它所在的 `mount namespace` 决定。不同 namespace 可有不同挂载关系，因此两个进程即使访问同一路径字符串，也可能看到不同内容。
+这里要注意的是：**路径 lookup 的起点**由 `fs_struct` 里的 `root` / `pwd` 这一对 `path` 决定（进程视角下的根与工作目录），而不是默认从 `mnt_ns->root` 那条挂载树入口出发。
 
-例如：
+顺带一提：`struct mnt_namespace` 里的 mount tree 根（`mnt_ns->root` 一类语义）描述的是该 mount namespace 内的整棵挂载树如何组织与管理，常见用途包括：
 
-```text
-namespace A
-/
-├── /proc
-├── /sys
-└── /mnt → ext4
-
-namespace B
-/
-├── /proc
-├── /sys
-└── /mnt → overlayfs
-```
-
-两个进程都访问 `/mnt`：在 namespace A 中 `/mnt` 可能是 ext4；在 namespace B 中可能是 overlayfs。
-
-因此，`mount namespace` 隔离的不是 inode、dentry、`super_block` 或磁盘本身，而是进程看到的挂载视图。
-
-内核里，一个 `mount namespace` 关联一棵 mount tree，对应关系如下（结构体为示意字段）：
-
-```c
-/* 简化：只保留理解 mount namespace 所需的核心字段 */
-struct mnt_namespace {
-    struct mount *root;   /* 该 namespace 中 mount tree 的根 mount */
-};
-```
-
-```text
-struct mnt_namespace
-    │
-    ▼
-struct mount *root   ← 该 namespace 内 mount tree 的入口（树顶）
-    │
-    ├──► struct mount
-    └──► struct mount
-            └──► …
-```
-
-在此基础上，每个进程既关联某个 mount namespace，也持有自己的文件系统上下文 `fs_struct`：
-
-```c
-struct task_struct {
-    struct nsproxy   *nsproxy;
-    struct fs_struct *fs;
-};
-```
-
-`nsproxy->mnt_ns` 表示当前进程使用哪棵 mount tree（简化，仅保留与 mount namespace 相关部分）：
-
-```c
-struct nsproxy {
-    struct mnt_namespace *mnt_ns;
-};
-```
-
-`fs_struct` 给出路径解析起点：
-
-```c
-struct fs_struct {
-    struct path root;
-    struct path pwd;
-};
-```
-
-- `root`：当前进程视角下的 `/`
-- `pwd`：当前工作目录
-
-路径解析时：
-
-```c
-if (pathname[0] == '/')
-    nd->path = current->fs->root;
-else
-    nd->path = current->fs->pwd;
-```
-
-即：绝对路径从 `current->fs->root` 开始；相对路径从 `current->fs->pwd` 开始。
-
-`struct path` 表示某个 mount 中的某个目录位置：
-
-```c
-struct path {
-    struct vfsmount *mnt;
-    struct dentry   *dentry;
-};
-```
-
-因此要注意：**路径 lookup 的起点**并不是 `namespace->root`，而是 `fs_struct` 里的 `root` / `pwd` 这一对 `path`（即进程视角下的根与工作目录）。
-
-顺带一提：`mnt_namespace` 所关联的 mount tree 根节点（`mnt_namespace->root` 一类语义）描述的是该 namespace 内的整棵挂载树如何组织与管理，常见用途包括：
-
-- 作为该 namespace mount tree 的拓扑入口；
-- 支持对该 namespace mount tree 的层级遍历；
-- 参与 namespace 的 clone / destroy，与挂载视图的生命周期绑定；
+- 作为该 mount namespace 下 mount tree 的拓扑入口；
+- 支持对该 mount namespace 下 mount tree 的层级遍历；
+- 参与 mount namespace 的 clone / destroy，与挂载视图的生命周期绑定；
 - 通过 `/proc/.../mountinfo` 等接口向用户态导出当前挂载视图。
 
 # 三. super_block 与 mount 的整体关系
