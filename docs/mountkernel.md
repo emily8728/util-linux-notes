@@ -990,7 +990,7 @@ namespace B
 
 因此，`mount namespace` 隔离的不是 inode、dentry、`super_block` 或磁盘本身，而是进程看到的挂载视图。
 
-内核里，一个 `mount namespace` 关联一棵 mount tree。简化示意：
+内核里，一个 `mount namespace` 关联一棵 mount tree，对应关系如下（结构体为示意字段）：
 
 ```c
 /* 简化：只保留理解 mount namespace 所需的核心字段 */
@@ -1001,13 +1001,13 @@ struct mnt_namespace {
 
 ```text
 struct mnt_namespace
-        │
-        ▼
-   struct mount *root          ← 该 namespace 内 mount tree 的入口（树顶）
-        │
-        ├──► struct mount（子节点）
-        └──► struct mount（子节点）
-                 └──► …
+    │
+    ▼
+struct mount *root   ← 该 namespace 内 mount tree 的入口（树顶）
+    │
+    ├──► struct mount
+    └──► struct mount
+            └──► …
 ```
 
 在此基础上，每个进程既关联某个 mount namespace，也持有自己的文件系统上下文 `fs_struct`：
@@ -1063,10 +1063,9 @@ struct path {
 
 顺带一提：`mnt_namespace` 所关联的 mount tree 根节点（`mnt_namespace->root` 一类语义）描述的是该 namespace 内的整棵挂载树如何组织与管理，常见用途包括：
 
-- 维护该 namespace 内的挂载拓扑（mount tree 的组织与变更）；
-- 在该 namespace 内遍历 mount tree（枚举、查找挂载关系）；
-- 处理挂载传播（propagation）相关语义；
-- 参与 namespace 的 clone / destroy（与挂载视图的生命周期绑定）；
+- 作为该 namespace mount tree 的拓扑入口；
+- 支持对该 namespace mount tree 的层级遍历；
+- 参与 namespace 的 clone / destroy，与挂载视图的生命周期绑定；
 - 通过 `/proc/.../mountinfo` 等接口向用户态导出当前挂载视图。
 
 # 三. super_block 与 mount 的整体关系
