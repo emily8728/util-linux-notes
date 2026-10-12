@@ -1,4 +1,4 @@
-这个章节主要描述 mount 对于内核的意义，它会在内核中建立两大重要结构体：
+前一篇写的是utillinux的mount功能代码阅读笔记，这一篇接应上一篇去简单介绍一下mount在内核中的存在，讲它在内核中建立两大重要结构体，算是和上一篇的闭环。
 # 一、super_block
 表示一个已激活的文件系统实例 `super_block`，通过这个结构体，它承载 VFS 与具体文件系统实现之间的连接。
 ```c
@@ -859,15 +859,36 @@ struct dentry {
 };
 ```
 请注意，这里 `vfsmount` 里面的 `*mnt_sb` 就是指向第一小节说的 `struct super_block`，这就让这两个结构体产生了关联。下面分别介绍其它字段：
-## 1. mnt_root
+## 1. `mnt_root`
 ```c
 struct dentry *mnt_root;
 ```
-该 mount 在该文件系统中的根目录。通常 `mnt_root = sb->s_root`，但 bind mount 时不同：
+`mnt_root` 指向**本次 mount 在该文件系统中的根 dentry**。
+挂载整个文件系统时，通常有：
+```c
+mnt_root = sb->s_root;
+```
+但 `mnt_root` 并不要求一定等于 `sb->s_root`。如果本次 mount 只暴露文件系统中的某个子树，`mnt_root` 就指向该子树的根 dentry。
+例如 bind mount：
 ```bash
 mount --bind /data/log /mnt
 ```
-此时 `mnt_root` 指向 `/data/log` 对应的 dentry，而非文件系统根。
+如果 `/data/log` 不是其所在文件系统的根目录，那么新 mount 的 `mnt_root` 指向 `log` 对应的 dentry，而不是 `sb->s_root`。
+Btrfs subvolume mount 也是典型情况。例如：
+```bash
+mount -o subvol=@home /dev/sda1 /mnt
+```
+本次 mount 选择 `@home` subvolume 作为挂载内容的根，因此 `mnt_root` 指向所选 subvolume 的根 dentry，而不是简单地认为它一定等于 `sb->s_root`。
+因此可以区分：
+```text
+sb->s_root
+    文件系统对应 superblock 的根 dentry
+
+mnt_root
+    某一次具体 mount 所使用的根 dentry
+```
+挂载整个文件系统时两者通常相同；bind mount、Btrfs subvolume mount 等情况下，两者可以不同。
+
 ## 2. mnt_mountpoint
 ```c
 struct dentry *mnt_mountpoint;
