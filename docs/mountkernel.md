@@ -350,6 +350,7 @@ struct super_operations {
 };
 ```
 下面分为三个部分介绍这些 super block 的操作函数：
+
 **3.3.A 与 inode 和 file 的操作函数的区别**
 
 注意与 `inode_operations` 和 `file_operations` 的区别：
