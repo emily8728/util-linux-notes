@@ -1,10 +1,10 @@
 # Linux mount 内核机制：super_block 与 mount（Linux 6.6）
 
-上一篇介绍了 util-linux 中 `mount` 命令及 libmount 的执行流程。本文接续用户态的挂载过程，聚焦内核中的两个核心对象：`struct super_block` 描述文件系统实例，`struct mount` 描述挂载关系。通过这两个对象，理解文件系统如何接入 VFS 挂载树，以及路径解析如何跨越挂载点。
+上一篇介绍了 util-linux 中 `mount` 命令及 libmount 的执行流程。本文接续用户态的挂载过程，聚焦内核中的两个核心对象：`struct super_block` 描述文件系统实例，`struct mount` 描述挂载关系。在此基础上，介绍文件系统实例的创建与复用、挂载树的组织与传播，以及 VFS 如何通过挂载点完成路径解析。
 
-> **版本说明**：用户态文章以 util-linux 2.39.3 为基准；本文以内核 **Linux v6.6** 为源码参照。
+> **版本说明**：上一篇用户态文章基于 util-linux 2.39.3 源码分析；本文主要参考 Linux v6.6 相关的公开技术资料，并结合部分内核源码进行核对。
 >
-> **代码说明**：文中结构体只摘录与主题相关的字段；流程图和标为“示意”的代码用于解释对象关系，并非 Linux v6.6 逐行源码。涉及真实函数名时，以文末列出的 v6.6 源码为准。
+> **代码说明**：文中的结构体仅摘录与主题相关的字段，流程图及标为“示意”的代码用于辅助理解对象关系和执行流程，不代表 Linux v6.6 的完整源码实现。
 ## 一、super_block
 表示一个已激活的文件系统实例 `super_block`，通过这个结构体，它承载 VFS 与具体文件系统实现之间的连接。
 ```c
@@ -1449,7 +1449,7 @@ struct mount {
     struct mount *mnt_parent;            // 父 mount（mount tree 拓扑关系）
     struct dentry *mnt_mountpoint;       // 当前 mount 挂载到父 mount 时对应的 mountpoint dentry
 
-    struct vfsmount mnt;                 // 对外暴露的 vfsmount 结构（见下一个结构体）
+    struct vfsmount mnt;                 // 对外暴露的也就是VFS通用代码使用的挂载对象部分（见下一个结构体）
 
     /* propagation（挂载传播）相关字段 */
     struct list_head  mnt_share;         // shared peer group 链表（shared mounts 互相连接）
