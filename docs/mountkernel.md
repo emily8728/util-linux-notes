@@ -318,6 +318,7 @@ static int ext4_fill_super(struct super_block *sb,
     /* 5.3 初始化每组 block / inode 数及相关参数 */
     sbi->s_blocks_per_group = le32_to_cpu(es->s_blocks_per_group);
     sbi->s_inodes_per_group = le32_to_cpu(es->s_inodes_per_group);
+    sbi->s_inode_size = le16_to_cpu(es->s_inode_size);
     sbi->s_inodes_per_block = sb->s_blocksize / sbi->s_inode_size;
 
     /* 根据文件系统实际使用的 group descriptor 大小计算 */
@@ -1447,7 +1448,7 @@ struct mount {
     struct mount *mnt_parent;            // 父 mount（mount tree 拓扑关系）
     struct dentry *mnt_mountpoint;       // 当前 mount 挂载到父 mount 时对应的 mountpoint dentry
 
-    struct vfsmount mnt;                 // 对外暴露的也就是VFS通用代码使用的挂载对象部分（见下一个结构体）
+    struct vfsmount mnt;                 // VFS通用代码使用的挂载对象部分（见下一个结构体）
 
     /* propagation（挂载传播）相关字段 */
     struct list_head mnt_share;       // shared peer group 链表
@@ -1603,13 +1604,13 @@ B (slave)
 
 ##### private
 
-**private** 不参与传播：既不接收其它 mount 传播来的挂载事件，也不向其它 mount 传播发生在自身挂载范围内的挂载事件；已有子 mount 的传播属性不受影响。如果需要将整棵子挂载树都设置为 private，应使用 mount --make-rprivate /mnt。
+**private** 不参与传播：既不接收其它 mount 传播来的挂载事件，也不向其它 mount 传播发生在自身挂载范围内的挂载事件。已有子 mount 的传播属性不受影响；若要将整棵子挂载树都设为 private，应使用 `mount --make-rprivate /mnt`。
 
 ```bash
 mount --make-private /mnt
 ```
 
-之后 `/mnt` 子树下的 mount 变化不会外传，也不会从外面接收传播。
+之后 `/mnt` 这个 mount 不再参与挂载传播；其已有子 mount 的传播属性不变。
 
 ##### unbindable
 
@@ -1629,23 +1630,19 @@ mount --make-private /mnt
    当前 mount 作为 **master** 时，用 `mnt_slave_list` 挂住其 **slave**；当前 mount 作为 slave 时，用 `mnt_slave` 挂入 `master->mnt_slave_list`，并用 `mnt_master` 指回 master。
 
 4. **`mnt.mnt_flags`**  
-   `struct mount` 内嵌的 `struct vfsmount` 中，`mnt_flags` 保存挂载标志（如 `T_SHARED`、`T_UNBINDABLE` 等）。示意（非完整枚举）：
+   `struct mount` 内嵌的 `struct vfsmount` 中，`mnt_flags` 保存挂载标志。其中与 propagation 类型有关的标志包括：
 
 ```c
-enum {
-    T_SHARED           = 1, /* mount is shared */
-    T_UNBINDABLE       = 2, /* mount is unbindable */
-    T_MARKED           = 4,
-    T_UMOUNT_CANDIDATE = 8,
-};
+#define MNT_SHARED       0x1000  /* shared mount */
+#define MNT_UNBINDABLE   0x2000  /* unbindable mount */
 ```
 
 **与 §5.1 四种传播类型的大致对应：**
 
-- **shared**：`mnt.mnt_flags` 含 `T_SHARED`，通过 `mnt_group_id` 和 `mnt_share` 管理 peer group。
-- **slave**：`mnt_master` 指向 master，`mnt_slave` 挂在 `master->mnt_slave_list` 上。
-- **private**：无 `T_SHARED` / `T_UNBINDABLE`，也无 master 传播关系。
-- **unbindable**：`mnt.mnt_flags` 含 `T_UNBINDABLE`。
+- **shared**：`mnt.mnt_flags` 含 `MNT_SHARED`，通过 `mnt_group_id` 和 `mnt_share` 管理 peer group。
+- **slave**：`mnt_master` 指向 master，`mnt_slave` 挂在 `master->mnt_slave_list` 上；一个 mount 可以同时具有 shared 和 slave 属性。
+- **private**：无 `MNT_SHARED` / `MNT_UNBINDABLE`，也无 master 传播关系。
+- **unbindable**：`mnt.mnt_flags` 含 `MNT_UNBINDABLE`。
 
 ### 6. mnt_ns
 **`mnt_ns`**，类型为 `struct mnt_namespace *`，表示**这个 mount 结点登记在哪个 mount namespace 里**（创建/切换时常说 `CLONE_NEWNS`；与 pid、net 等其它 namespace 不是一类东西）。
