@@ -89,24 +89,22 @@ journal inode
 内存
 ────────────────────────────────────
 struct super_block
+    ├── s_blocksize           ← 根据 s_es->s_log_block_size 计算
     │
-    ▼
-sb->s_fs_info
-    │
-    ▼
+    └── s_fs_info
+          │
+          ▼
 struct ext4_sb_info
     │
     ├── s_es ────────────────► struct ext4_super_block
     │                          (磁盘 superblock 的内存副本)
     │
-    ├── s_blocks_count       ← s_es->s_blocks_count_lo/hi
     ├── s_blocks_per_group    ← s_es->s_blocks_per_group
     ├── s_inodes_per_group    ← s_es->s_inodes_per_group
     ├── s_inode_size          ← s_es->s_inode_size
-    ├── s_blocksize           ← s_es->s_log_block_size 计算
     ├── s_groups_count        ← 根据磁盘块数和分组参数计算
     ├── s_desc_per_block      ← 根据 block size 计算
-    ├── s_group_desc[]        ← 读取 ext4_group_desc[]
+    ├── s_group_desc          ← 指向缓存 ext4_group_desc 的磁盘块数组
     ├── s_journal             ← 加载 journal
     ├── 计数器
     └── mount 参数
@@ -528,7 +526,7 @@ struct dentry *s_root;
 
 ```c
 //示意，非逐字摘录
-root_inode = ext4_iget(sb, EXT4_ROOT_INO);
+root_inode = ext4_iget(sb, EXT4_ROOT_INO, EXT4_IGET_SPECIAL);
 sb->s_root = d_make_root(root_inode);
 if (!sb->s_root)
     return -ENOMEM;
@@ -536,7 +534,7 @@ if (!sb->s_root)
 
 对应关系：
 
-1. **`ext4_iget(sb, EXT4_ROOT_INO)`**  
+1. **`ext4_iget(sb, EXT4_ROOT_INO, EXT4_IGET_SPECIAL)`**  
    从磁盘上的 ext4 实例读出根 inode，在内存里得到 `struct inode`。
 
 2. **`d_make_root(root_inode)`**  
@@ -1452,12 +1450,11 @@ struct mount {
     struct vfsmount mnt;                 // 对外暴露的也就是VFS通用代码使用的挂载对象部分（见下一个结构体）
 
     /* propagation（挂载传播）相关字段 */
-    struct list_head  mnt_share;         // shared peer group 链表（shared mounts 互相连接）
-    struct hlist_head mnt_slave_list;    // 当前 mount 作为 master 时，其 slave mounts 链表头
-    struct hlist_node mnt_slave;         // 当前 mount 作为 slave 时，挂入 master->mnt_slave_list 的节点
-    struct mount      *mnt_master;       // 当前 slave mount 对应的 master mount
-    int               mnt_group_id;      // shared peer group 的 group id
-    int               mnt_t_flags;       // mount 内部拓扑/propagation 相关 flags
+    struct list_head mnt_share;       // shared peer group 链表
+    struct list_head mnt_slave_list;  // 当前 mount 的 slave mounts 链表头
+    struct list_head mnt_slave;       // 当前 mount 挂入 master 的 slave 链表的节点
+    struct mount *mnt_master;         // 当前 mount 的 master
+    int mnt_group_id;                 // shared peer group ID
 
     struct mnt_namespace *mnt_ns;        // 当前 mount 所属的 mount namespace
 };
@@ -1606,7 +1603,7 @@ B (slave)
 
 ##### private
 
-**private** 不参与传播：既不接收外部事件，也不向其它 mount 播本 subtree 的变化，是最「隔绝」的一种。如果需要将整棵子挂载树都设置为 private，应使用 mount --make-rprivate /mnt。
+**private** 不参与传播：既不接收其它 mount 传播来的挂载事件，也不向其它 mount 传播发生在自身挂载范围内的挂载事件；已有子 mount 的传播属性不受影响。如果需要将整棵子挂载树都设置为 private，应使用 mount --make-rprivate /mnt。
 
 ```bash
 mount --make-private /mnt
@@ -1616,7 +1613,7 @@ mount --make-private /mnt
 
 ##### unbindable
 
-**unbindable** 表示该 mount **不能**再作为 bind mount 的源被复制，用于避免某些拓扑下形成难以拆开的绑定关系。执行 recursive bind（`rbind`）时，源树中的 unbindable 子挂载会被排除。与 `T_UNBINDABLE` 等标志对应，详见下一小节。
+**unbindable** 表示该 mount **不能**再作为 bind mount 的源被复制，用于避免某些拓扑下形成难以拆开的绑定关系。执行 recursive bind（`rbind`）时，源树中的 unbindable 子挂载会被排除。
 
 #### 5.2 与 propagation 相关的 `struct mount` 字段
 
@@ -1631,8 +1628,8 @@ mount --make-private /mnt
 3. **`mnt_slave_list` / `mnt_slave` / `mnt_master`**  
    当前 mount 作为 **master** 时，用 `mnt_slave_list` 挂住其 **slave**；当前 mount 作为 slave 时，用 `mnt_slave` 挂入 `master->mnt_slave_list`，并用 `mnt_master` 指回 master。
 
-4. **`mnt_t_flags`**  
-   保存传播相关标志（如 `T_SHARED`、`T_UNBINDABLE` 等）。示意（非完整枚举）：
+4. **`mnt.mnt_flags`**  
+   `struct mount` 内嵌的 `struct vfsmount` 中，`mnt_flags` 保存挂载标志（如 `T_SHARED`、`T_UNBINDABLE` 等）。示意（非完整枚举）：
 
 ```c
 enum {
@@ -1645,11 +1642,10 @@ enum {
 
 **与 §5.1 四种传播类型的大致对应：**
 
-- **shared**：`mnt_t_flags` 含 `T_SHARED`，有 `mnt_group_id`，并参与 `mnt_share` 链表。
+- **shared**：`mnt.mnt_flags` 含 `T_SHARED`，通过 `mnt_group_id` 和 `mnt_share` 管理 peer group。
 - **slave**：`mnt_master` 指向 master，`mnt_slave` 挂在 `master->mnt_slave_list` 上。
-- **private**：不参与 shared peer group，无上述 slave/master 传播关系。
-- **unbindable**：`mnt_t_flags` 含 `T_UNBINDABLE`。
-
+- **private**：无 `T_SHARED` / `T_UNBINDABLE`，也无 master 传播关系。
+- **unbindable**：`mnt.mnt_flags` 含 `T_UNBINDABLE`。
 
 ### 6. mnt_ns
 **`mnt_ns`**，类型为 `struct mnt_namespace *`，表示**这个 mount 结点登记在哪个 mount namespace 里**（创建/切换时常说 `CLONE_NEWNS`；与 pid、net 等其它 namespace 不是一类东西）。
