@@ -1606,7 +1606,7 @@ B (slave)
 
 ##### private
 
-**private** 不参与传播：既不接收外部事件，也不向其它 mount 播本 subtree 的变化，是最「隔绝」的一种。
+**private** 不参与传播：既不接收外部事件，也不向其它 mount 播本 subtree 的变化，是最「隔绝」的一种。如果需要将整棵子挂载树都设置为 private，应使用 mount --make-rprivate /mnt。
 
 ```bash
 mount --make-private /mnt
@@ -1616,7 +1616,7 @@ mount --make-private /mnt
 
 ##### unbindable
 
-**unbindable** 表示该 mount **不允许**再被 bind 到别处（避免某些拓扑下形成难以拆开的绑定关系）；与 `T_UNBINDABLE` 等标志对应，详见下一小节。
+**unbindable** 表示该 mount **不能**再作为 bind mount 的源被复制，用于避免某些拓扑下形成难以拆开的绑定关系。执行 recursive bind（`rbind`）时，源树中的 unbindable 子挂载会被排除。与 `T_UNBINDABLE` 等标志对应，详见下一小节。
 
 #### 5.2 与 propagation 相关的 `struct mount` 字段
 
@@ -1759,12 +1759,12 @@ struct mount {
 - **Step 2：解析 `mnt`**
     - 当前：`path = (rootfs_mnt, "/")`
     - 取目录 inode：`dir_inode = d_inode(path.dentry)`
-    - 调用 lookup：`child = dir_inode->i_op->lookup(dir_inode, path.dentry, "mnt")`
-    - 得到：`child = dentry("mnt")`（属于 rootfs）
+    - 调用 lookup（示意 dcache 未命中，已准备好名称为 `"mnt"` 的 `child_dentry`）：`dir_inode->i_op->lookup(dir_inode, child_dentry, 0)`
+    - 得到：`child_dentry = dentry("mnt")`（属于 rootfs）
     - 更新：`path = (rootfs_mnt, dentry("mnt"))`
 
 - **Step 3：检查 mountpoint（关键）**
-    - 检查挂载点：`child_mnt = lookup_mnt(path.mnt, path.dentry)`
+    - 检查挂载点：`child_mnt = lookup_mnt(&path)`
     - 查找 key：`(parent mount = rootfs_mnt, mountpoint dentry = dentry("/mnt"))`
     - 命中后 crossing mount：`path.mnt = child_mnt`，`path.dentry = child_mnt->mnt_root`
     - 结果：`path = (ext4_mnt, dentry("/"))`
@@ -1773,12 +1773,13 @@ struct mount {
 - **Step 4：解析 `a.txt` 并得到最终 inode**
     - 当前目录：`path = (ext4_mnt, "/")`
     - 取当前目录 inode：`dir_inode = d_inode(path.dentry)`
-    - 在 ext4 根目录查找 `"a.txt"`：`child = dir_inode->i_op->lookup(dir_inode, path.dentry, "a.txt")`
-    - 得到：`child = dentry("a.txt")`，且 `child->d_inode = inode_of_a_txt`
+    - 在 ext4 根目录查找 `"a.txt"`（示意 dcache 未命中，已准备好名称为 `"a.txt"` 的 `child_dentry`）：`dir_inode->i_op->lookup(dir_inode, child_dentry, 0)`
+    - 得到：`child_dentry = dentry("a.txt")`，且 `child_dentry->d_inode = inode_of_a_txt`
     - 更新：`path = (ext4_mnt, dentry("a.txt"))`
     - 最终目标：`inode = d_inode(path.dentry)`，即 `inode = inode_of_a_txt`
 
 对应伪代码：
+
 ```c
 /*
  * 初始状态：
@@ -1790,10 +1791,10 @@ struct mount {
  *    └── a.txt
  */
 struct path path;
-struct dentry *child;
+struct dentry *child_dentry;
 struct inode *dir_inode;
 struct inode *inode;
-struct mount *mounted;
+struct vfsmount *mounted;
 
 /* Step 0: 起点 "/" */
 path.mnt = rootfs_mnt;
@@ -1801,20 +1802,23 @@ path.dentry = rootfs_sb->s_root;
 
 /* Step 1: lookup "mnt" */
 dir_inode = d_inode(path.dentry);
-child = dir_inode->i_op->lookup(dir_inode, path.dentry, "mnt");
-path.dentry = child; /* path = (rootfs_mnt, "/mnt") */
+child_dentry->d_name = (struct qstr) QSTR_INIT("mnt", 3); /* 示意：VFS 已准备好待查找的 dentry */
+dir_inode->i_op->lookup(dir_inode, child_dentry, 0);
+path.dentry = child_dentry; /* path = (rootfs_mnt, "/mnt") */
 
 /* Step 2: crossing mount */
-mounted = lookup_mnt(path.mnt, path.dentry);
+mounted = lookup_mnt(&path);
 if (mounted) {
-    path.mnt = &mounted->mnt;
-    path.dentry = mounted->mnt.mnt_root; /* path = (ext4_mnt, "/") */
+    path.mnt = mounted;
+    path.dentry = mounted->mnt_root;
+    /* path = (ext4_mnt, "/") */
 }
 
 /* Step 3: lookup "a.txt" */
 dir_inode = d_inode(path.dentry);
-child = dir_inode->i_op->lookup(dir_inode, path.dentry, "a.txt");
-path.dentry = child; /* path = (ext4_mnt, "a.txt") */
+child_dentry->d_name = (struct qstr) QSTR_INIT("a.txt", 5); /* 示意：VFS 已准备好待查找的 dentry */
+dir_inode->i_op->lookup(dir_inode, child_dentry, 0);
+path.dentry = child_dentry; /* path = (ext4_mnt, "a.txt") */
 
 /* Step 4: 得到最终 inode */
 inode = d_inode(path.dentry); /* inode 属于 ext4 */
