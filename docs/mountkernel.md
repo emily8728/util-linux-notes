@@ -590,11 +590,11 @@ vfs_create()
     ↓
 inode->i_op->create              ← inode_operations
     ↓
-ext4_create()
+ext4_new_inode()
     ↓
-分配 inode（内存对象）
+sb->s_op->alloc_inode           ← super_operations
     ↓
-sb->s_op->alloc_inode            ← super_operations
+ext4_alloc_inode()              
     ↓
 初始化 inode（mode/uid/gid/nlink）
     ↓
@@ -988,31 +988,33 @@ path_mount()                         ← VFS
     ↓
 vfs_get_tree()                       ← VFS
     ↓
-fc->ops->get_tree                   ← fs_context_operations
+fc->ops->get_tree                    ← fs_context_operations
     ↓
 ext4_get_tree()
     ↓
 get_tree_bdev()                      ← VFS
     创建或复用 super_block
     ↓
-ext4_fill_super()
+ext4_fill_super()                    
+    ↓
+初始化 sb->s_fs_info
     ↓
 读取磁盘 superblock
     ↓
-初始化：
-    sb->s_op
-    sb->s_fs_info
-    sb->s_root
+设置 sb->s_op
     ↓
-读取 root inode
+ext4_iget()                          ← 获取 root inode
+    ├── sb->s_op->alloc_inode        ← super_operations分配内存 inode
+    │       ↓
+    │   ext4_alloc_inode()
+    └── 读取磁盘 inode 数据并初始化内存 inode
     ↓
-sb->s_op->alloc_inode               ← super_operations
+创建 root dentry
     ↓
-ext4_alloc_inode()
+设置 sb->s_root
 ```
-
-- `sb->s_op->alloc_inode` 并不是 `ext4_fill_super()` 直接调用的，而是读取 root inode 时，通过 VFS inode 分配流程间接调用的。
-- `fc` 是 `struct fs_context *`，表示本次文件系统挂载操作的上下文，保存文件系统类型、挂载参数、待创建的挂载树等信息。
+- `sb->s_op->alloc_inode` 并不是 `ext4_fill_super()` 直接调用的，而是 `ext4_iget()` 获取 root inode 时，若 inode 尚未缓存，通过 VFS inode 分配流程间接调用的。**内存 inode 的分配发生在读取磁盘 inode 数据之前。**
+- `fc` 是 `struct fs_context *`，表示本次文件系统挂载操作的上下文，保存文件系统类型、挂载参数及相关状态。
   - `fc->ops` 是 `struct fs_context_operations *`，指向文件系统为该上下文注册的操作函数表。
   - `fc->ops->get_tree` 是其中的回调，用于取得本次挂载所需的文件系统根目录树。对 ext4，该回调对应 `ext4_get_tree()`，随后经 VFS 的 `get_tree_bdev()` 创建或复用 `super_block`，并在需要初始化新实例时调用 `ext4_fill_super()`。
 
