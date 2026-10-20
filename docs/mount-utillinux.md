@@ -402,24 +402,24 @@ cxt->update->fs
 
 总流程：
 
-```768:796:libmount/src/context_mount.c
-	rc = mnt_context_apply_fstab(cxt);
-	if (!rc) rc = mnt_context_merge_mflags(cxt);
-	if (!rc && cxt->fs && cxt->optlist)
-		rc = mnt_fs_follow_optlist(cxt->fs, cxt->optlist);
-	if (!rc) rc = evaluate_permissions(cxt);
-	if (!rc) rc = fix_optstr(cxt);                    /* → PREP_OPTIONS */
-	if (!rc) rc = mnt_context_prepare_srcpath(cxt);   /* → PREP_SOURCE */
-	if (!rc) rc = mnt_context_guess_fstype(cxt);
-	if (!rc) rc = prepare_target(cxt);                /* → PREP_TARGET */
-	if (!rc) rc = mnt_context_prepare_helper(cxt, "mount", NULL);
-	if (!rc && mnt_context_is_onlyonce(cxt)) {
-		int mounted = 0;
-		rc = mnt_context_is_fs_mounted(cxt, cxt->fs, &mounted);
-		if (rc == 0 && mounted == 1)
-			rc = -MNT_ERR_ONLYONCE;
-	}
-	if (!rc) rc = mnt_context_call_hooks(cxt, MNT_STAGE_PREP);
+```c
+rc = mnt_context_apply_fstab(cxt);
+if (!rc) rc = mnt_context_merge_mflags(cxt);
+if (!rc && cxt->fs && cxt->optlist)
+	rc = mnt_fs_follow_optlist(cxt->fs, cxt->optlist);
+if (!rc) rc = evaluate_permissions(cxt);
+if (!rc) rc = fix_optstr(cxt);                    /* → PREP_OPTIONS */
+if (!rc) rc = mnt_context_prepare_srcpath(cxt);   /* → PREP_SOURCE */
+if (!rc) rc = mnt_context_guess_fstype(cxt);
+if (!rc) rc = prepare_target(cxt);                /* → PREP_TARGET */
+if (!rc) rc = mnt_context_prepare_helper(cxt, "mount", NULL);
+if (!rc && mnt_context_is_onlyonce(cxt)) {
+	int mounted = 0;
+	rc = mnt_context_is_fs_mounted(cxt, cxt->fs, &mounted);
+	if (rc == 0 && mounted == 1)
+		rc = -MNT_ERR_ONLYONCE;
+}
+if (!rc) rc = mnt_context_call_hooks(cxt, MNT_STAGE_PREP);
 ```
 
 #### 3.1 `mnt_context_apply_fstab`：补全 source/target/options
@@ -470,16 +470,16 @@ mnt_context_apply_fstab(cxt)
 
 对应流程「确定 optsmode」一步；在 `mnt_context_apply_fstab()` 开头，若 `cxt->optsmode` 尚未设定则写入默认值，并处理 `MNT_OMODE_NOTAB` 对 FSTAB/MTAB/FORCE 位的清理。
 
-```2390:2400:libmount/src/context.c
-	if (mnt_context_is_restricted(cxt)) {
-		cxt->optsmode = MNT_OMODE_USER;
-	} else if (cxt->optsmode == 0) {
-		cxt->optsmode = MNT_OMODE_AUTO;
-	} else if (cxt->optsmode & MNT_OMODE_NOTAB) {
-		cxt->optsmode &= ~MNT_OMODE_FSTAB;
-		cxt->optsmode &= ~MNT_OMODE_MTAB;
-		cxt->optsmode &= ~MNT_OMODE_FORCE;
-	}
+```c
+if (mnt_context_is_restricted(cxt)) {
+	cxt->optsmode = MNT_OMODE_USER;
+} else if (cxt->optsmode == 0) {
+	cxt->optsmode = MNT_OMODE_AUTO;
+} else if (cxt->optsmode & MNT_OMODE_NOTAB) {
+	cxt->optsmode &= ~MNT_OMODE_FSTAB;
+	cxt->optsmode &= ~MNT_OMODE_MTAB;
+	cxt->optsmode &= ~MNT_OMODE_FORCE;
+}
 ```
 
 | 模式 | 含义 |
@@ -495,17 +495,17 @@ mnt_context_apply_fstab(cxt)
 
 本节判断 `mnt_context_apply_fstab()` 是否要提前 `return`（不查任何表）。若不 skip，则按 `optsmode` 里的 **FSTAB / MTAB** 位依次查 **fstab**、必要时再查 **mountinfo**（仅 remount/umount）；skip时 **fstab 与 mountinfo 都不查**。
 
-```2417:2428:libmount/src/context.c
-	/* fstab is not required if source and target are specified */
-	if (src && tgt && !(cxt->optsmode & MNT_OMODE_FORCE)) {
-		return 0;   /* skip */
-	}
+```c
+/* fstab is not required if source and target are specified */
+if (src && tgt && !(cxt->optsmode & MNT_OMODE_FORCE)) {
+	return 0;   /* skip */
+}
 
-	if (!src && tgt
-	    && !(cxt->optsmode & MNT_OMODE_FSTAB)
-	    && !(cxt->optsmode & MNT_OMODE_MTAB)) {
-		return 0;   /* skip, probably MS_PROPAGATION */
-	}
+if (!src && tgt
+    && !(cxt->optsmode & MNT_OMODE_FSTAB)
+    && !(cxt->optsmode & MNT_OMODE_MTAB)) {
+	return 0;   /* skip, probably MS_PROPAGATION */
+}
 ```
 
 满足下列之一则 **不查表**（`return 0`，不标 `MNT_FL_TAB_APPLIED`）：
@@ -537,27 +537,27 @@ apply_table(cxt, tab, …)
 
 `apply_fs()` 把 fstab/mountinfo 里**匹配到的行**的字段**抄进** `cxt->fs`，并合并 options 到 `optlist`：
 
-```2269:2308:libmount/src/context.c
-	/* 字段拷贝 */
-	rc = mnt_fs_set_source(cxt->fs, mnt_fs_get_source(fs));
-	rc = mnt_fs_set_target(cxt->fs, mnt_fs_get_target(fs));
-	if (!mnt_fs_get_fstype(cxt->fs))
-		rc = mnt_fs_set_fstype(cxt->fs, mnt_fs_get_fstype(fs));
-	if (!mnt_fs_get_root(cxt->fs) && mnt_fs_get_root(fs))
-		rc = mnt_fs_set_root(cxt->fs, mnt_fs_get_root(fs));
+```c
+/* 字段拷贝 */
+rc = mnt_fs_set_source(cxt->fs, mnt_fs_get_source(fs));
+rc = mnt_fs_set_target(cxt->fs, mnt_fs_get_target(fs));
+if (!mnt_fs_get_fstype(cxt->fs))
+	rc = mnt_fs_set_fstype(cxt->fs, mnt_fs_get_fstype(fs));
+if (!mnt_fs_get_root(cxt->fs) && mnt_fs_get_root(fs))
+	rc = mnt_fs_set_root(cxt->fs, mnt_fs_get_root(fs));
 
-	/* options：按 optsmode 分支（§3.1.1） */
-	if (cxt->optsmode & MNT_OMODE_IGNORE)
-		;
-	else if (cxt->optsmode & MNT_OMODE_REPLACE)
-		rc = mnt_optlist_set_optstr(ls, mnt_fs_get_options(fs), NULL);
-	else if (cxt->optsmode & MNT_OMODE_APPEND)
-		rc = mnt_optlist_append_optstr(ls, mnt_fs_get_options(fs), NULL);
-	else if (cxt->optsmode & MNT_OMODE_PREPEND)
-		rc = mnt_optlist_prepend_optstr(ls, mnt_fs_get_options(fs), NULL);
+/* options：按 optsmode 分支（§3.1.1） */
+if (cxt->optsmode & MNT_OMODE_IGNORE)
+	;
+else if (cxt->optsmode & MNT_OMODE_REPLACE)
+	rc = mnt_optlist_set_optstr(ls, mnt_fs_get_options(fs), NULL);
+else if (cxt->optsmode & MNT_OMODE_APPEND)
+	rc = mnt_optlist_append_optstr(ls, mnt_fs_get_options(fs), NULL);
+else if (cxt->optsmode & MNT_OMODE_PREPEND)
+	rc = mnt_optlist_prepend_optstr(ls, mnt_fs_get_options(fs), NULL);
 
-	if (!rc)
-		cxt->flags |= MNT_FL_TAB_APPLIED;
+if (!rc)
+	cxt->flags |= MNT_FL_TAB_APPLIED;
 ```
 
 | optsmode | 调用 | 默认场景 | 表项 options 写入方式 | 相对命令行 `-o` |
@@ -656,7 +656,7 @@ mount -a 每行：
 
 ##### 3.2.2 本步：`merge_mflags` 做什么
 
-```2102:2113:libmount/src/context.c
+```c
 int mnt_context_merge_mflags(struct libmnt_context *cxt)
 {
 	...
