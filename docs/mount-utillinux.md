@@ -294,7 +294,6 @@ suid_drop(cxt);
 
 第一章在 `mount.c` 中完成命令行解析、restricted 检查，并将 source、target、options 等初始挂载信息写入 `libmnt_context`。本章继续进入 libmount，分析 `mnt_context_mount()` 如何准备挂载参数、执行实际挂载并更新 utab。
 
----
 ### 1. 从 `main()` 到 libmount 的交接
 
 第一章已经创建了本次操作使用的 context：
@@ -335,7 +334,6 @@ if (rc == -EPERM && mnt_context_is_restricted(cxt)
 
 `!mnt_context_syscall_called(cxt)` 则保证：如果第一次的 `EPERM` 已经来自实际的 mount syscall，就不会再进行这种重试。
 
----
 ### 2. `mnt_context_mount()` 总控
 
 `main()` 在 argv 分派、`sanitize_paths()`、`MS_MOVE` 等处理完成后调用：
@@ -395,7 +393,6 @@ cxt->update->fs
 
 `prepare_update` 创建更新对象并准备 `update->fs`；`do_mount` 执行真正的挂载，其中 new mount API 路径可在 mount 建立后取得 mount ID，而 filesystem type 需要逐项试挂载时，成功的 `try_type` 也会写入 `update->fs->fstype`；最后 `update_tabs` 将准备好的 entry 提交到 utab。
 
----
 ### 3. `prepare_mount`：按源码调用顺序展开
 
 `mnt_context_prepare_mount()` 在 `mnt_context_mount()` 内首先执行，把 `main()` 传入的 context 补全、校验，编译成可执行的挂载计划。子节按源码调用顺序编号。
@@ -627,7 +624,6 @@ mount -a 每行：
 
 因此 `-c` **不是**「整个 libmount 都不 canonicalize」；只是 **mount context 这条挂载准备链路**不再自动整理字符串。例如 `evaluate_permissions` 里 `owner`/`group` 分支仍可能调 `mnt_resolve_spec` 做 `stat`，与 `prepare_srcpath` 策略并不完全一致。
 
----
 #### 3.2 `mnt_context_merge_mflags`：折叠 optlist
 
 在 `apply_fstab`（§3.1.4 把表项插/接到 optlist）之后、`evaluate_permissions` 之前执行。第一章已说明命令行 `-o` 先进 **optlist**；本节先交代 prepare 阶段要用的结构，再说本步做什么。
@@ -738,7 +734,6 @@ struct libmnt_optmap {
 
 **`nodiratime`：** 只抑制**目录**的 atime 更新，与上面三种 atime 策略独立，不走 `MOUNT_ATTR__ATIME` 互斥。
 
----
 #### 3.3 `mnt_fs_follow_optlist`：让 `fs` 跟随 context 的 `optlist`
 
 `mnt_context_merge_mflags()` 完成后，`prepare_mount()` 调用：
@@ -780,7 +775,6 @@ libmnt_fs
 
 > **`mnt_fs_follow_optlist()` 不生成第二份选项，而是让 `cxt->fs` 与 `cxt` 共享同一个 `optlist`；`cxt->optlist` 负责 mount 过程中的结构化选项处理，`fs` 则可以在需要时从这份 optlist 得到字符串形式的选项。**
 
----
 #### 3.4 `evaluate_permissions`：处理用户挂载权限
 
 `evaluate_permissions()` 主要处理 `user`、`users`、`owner`、`group` 这些 userspace 选项所表达的普通用户挂载权限，并补充它们隐含的安全挂载标志：
@@ -940,7 +934,6 @@ user=bo
 
 这与 restricted 用户的裸 `user` 不同。裸 `user` 后面会在 `fix_optstr()` 中临时补成 `user=<当前用户名>`,见下一节。
 
----
 #### 3.5 `fix_optstr`：修正挂载选项
 
 前面的 `mnt_context_apply_fstab()`、`mnt_context_merge_mflags()` 等步骤已经把命令行、fstab 等来源的挂载选项汇总到了 `cxt->optlist` 中，`evaluate_permissions()` 也已经完成了 restricted user 相关的权限检查。
@@ -1400,7 +1393,6 @@ MNT_FL_MOUNTOPTS_FIXED
 * `X-mount.owner/group/mode`、`X-mount.idmap`、SELinux 等特殊功能已经完成 `PREP_OPTIONS` 阶段的解析；
 * 需要等到 `PREP_TARGET`、`MOUNT_POST`、`POST` 才能执行的工作，已经通过 hook 登记到相应阶段。
 
----
 #### 3.6 `mnt_context_prepare_srcpath`：准备真正用于挂载的 source
 
 `mnt_context_prepare_srcpath()` 负责把 `cxt->fs` 中的 source 解析、规范化成后续挂载可以使用的路径：
@@ -1601,7 +1593,6 @@ SRC=/dev/mapper/<verity-device>
 
 另外，loop 和 verity 相关 userspace option 还使用了 `MNT_NOHLPS`，表示这些 option 由 libmount 自己的 userspace 逻辑处理，不作为相应 option 交给外部 mount helper。
 
----
 #### 3.7 `mnt_context_guess_fstype`：确定挂载使用的文件系统类型
 
 `mnt_context_guess_fstype()` 的作用是确定本次挂载应使用的 filesystem type。前面的 `mnt_context_prepare_srcpath()` 已经把 source 准备成实际可用的路径，例如 `/dev/sda1`、`/dev/loop0` 或 `/dev/mapper/...`；这一步则在没有明确类型时，根据这个最终 source 探测 filesystem type，并在探测成功后写入：
@@ -1794,7 +1785,6 @@ mnt_context_prepare_helper(cxt, "mount", NULL)
 
 如果 `fstype` 是单一类型，它可以据此查找相应的 `mount.<type>` helper；但如果 `fstype` 仍是带逗号的类型列表，`prepare_helper()` 不会直接查找 helper。等挂载阶段的`mnt_context_do_mount()` 里`do_mount_by_types()` 逐项取出具体的 `try_type` 后，`do_mount(cxt, try_type)` 才会针对该具体类型再次调用 `mnt_context_prepare_helper()`。
 
----
 #### 3.8 `prepare_target`：准备挂载目标
 
 前面的 `mnt_context_prepare_srcpath()` 解决的是“**从哪里挂载**”，`prepare_target()` 处理的则是“**挂到哪里**”：它准备 `cxt->fs->target`，使 target 成为后续 mount 操作可以直接使用的最终路径。
@@ -1863,7 +1853,6 @@ mnt_context_call_hooks(cxt, MNT_STAGE_PREP_TARGET);
 
 这一阶段主要处理那些**必须等 target 确定以后才能完成**的 mount option。
 
----
 ##### 3.8.2 `hook_subdir`：处理 `X-mount.subdir`
 
 `X-mount.subdir=<path>` 用于只挂载 filesystem 中的某个子目录，而不是整个 filesystem root。
@@ -2057,7 +2046,6 @@ cxt->fs->target
 
 该功能只允许 root 或非 restricted 的 mount 使用；restricted mount 会返回 `EPERM`。
 
----
 ##### 3.8.4 `hook_selinux_target`：解析 `rootcontext=@target`
 
 SELinux 的：
@@ -2132,7 +2120,6 @@ PREP_OPTIONS
 
 因此这里把 SELinux 处理放在 `PREP_TARGET`，不是因为所有 SELinux option 都在这个阶段处理，而是因为 **`rootcontext=@target` 必须等 target 的最终路径确定、并且必要时已经由 `X-mount.mkdir` 创建之后，才能取得 target 的实际 SELinux context。**
 
----
 #### 3.9 `mnt_context_prepare_helper`：选择外部 mount helper
 
 前面的步骤已经基本确定了本次挂载的 source、target、fstype 和 options。接下来还有一个问题需要确定：
@@ -2312,7 +2299,6 @@ mnt_context_prepare_helper(cxt, "mount", try_type);
 
 所以 helper 的判断最终是针对**当前正在尝试的单个 fstype**完成的。
 
----
 ##### 3.9.2 `.subtype`：兼容基础类型的 helper
 
 FUSE 文件系统的 fstype 可以采用 `type.subtype` 形式，例如：
@@ -2440,7 +2426,6 @@ cxt->helper = NULL
 
 所以 helper 不是在 libmount 自己挂载之前额外执行的一步，而是**替代了 `do_mount()` 中 libmount 自己完成实际挂载的那条路径**。
 
----
 ##### 3.9.4 `exec_helper`：将 context 中的参数重新传给 helper
 
 进入 helper 路径后，真正执行挂载的程序从 libmount 变成了独立的 `mount.<type>`。前面 `mount` 已经解析过的参数保存在 `struct libmnt_context` 和 `optlist` 中，而新的 helper 程序无法直接读取这些数据，因此 `exec_helper()` 需要重新构造 helper 的命令行参数。
@@ -2674,7 +2659,6 @@ target namespace：
 
 也就是说，libmount **不是先进入 target namespace，再在里面 exec `mount.<type>`**；它回到 origin namespace 执行 helper，而需要操作的 target namespace则作为 `-N` 参数交给 helper。
 
----
 ##### 3.9.6 helper 与后续 utab 更新
 
 `exec_helper()` 返回后，流程回到 `mnt_context_do_mount()`去做挂载，随后外层 `mnt_context_mount()` 调用去更新utab（见第6节）：
@@ -3358,7 +3342,6 @@ MNT_FL_PREPARED
 
 后面的 `mnt_context_do_mount()` 才进入 MOUNT 阶段，执行这里已经确定并注册好的挂载操作。
 
----
 ### 4. `prepare_update`：准备 utab 更新信息
 
 `mnt_context_prepare_update()` 负责判断本次操作是否需要更新 userspace mount table；如果需要，则创建 `cxt->update`，并通过 `mnt_update_set_fs()` 准备后续更新 utab 所需的信息。
@@ -3390,7 +3373,6 @@ cxt->update
 * **`cxt->update`**：utab 更新操作的 handler，保存 utab 文件名以及本次更新所需的状态；
 * **`update->fs`**：根据当前 `cxt->fs` 准备出来的 utab 条目，后续 `update_tabs` 会以它为基础更新 utab。
 
----
 #### 4.1 为什么在 `do_mount` 之前准备
 
 `prepare_update` 放在实际挂载之前，并不是提前写 utab，而是提前准备**内存中的更新信息**。
@@ -3424,7 +3406,6 @@ mnt_update_set_fs()
 
 上层调用链因此停止，不必等到实际 mount syscall 后才发现问题。
 
----
 ##### 2. 将 utab 信息与后续的临时挂载改动隔离
 
 这是 `prepare_update` 放在 `do_mount` 前面更重要的原因之一。
@@ -3471,7 +3452,6 @@ cxt->fs
 
 因此 `update->fs` 与实际挂载过程中继续使用的 `cxt->fs` 是分开的。
 
----
 ##### 3. 挂载过程中仍可回填最终结果
 
 提前建立 `update->fs` 并不意味着它此后完全不能变化。
@@ -3518,7 +3498,6 @@ update_tabs 最终提交
 
 所以 `update->fs` 更准确地说，是**挂载前建立、挂载过程中允许补充最终结果的 utab 更新项**。
 
----
 #### 4.2 哪些情况会跳过 utab 更新准备
 
 `mnt_context_prepare_update()` 并不是每次都会创建 `cxt->update`。
@@ -3547,7 +3526,6 @@ if (mnt_context_propagation_only(cxt)) {
 
 因为这里只是在修改已有 mount tree 的传播属性，不需要为此准备新的 utab 更新项。
 
----
 ##### 2. NOMTAB
 
 随后检查：
@@ -3573,7 +3551,6 @@ if (cxt->action == MNT_ACT_UMOUNT &&
 
 对于本章讨论的 mount 路径，主要关注前面的 `mnt_context_is_nomtab()` 判断即可。
 
----
 ##### 3. 没有 writable table
 
 接着：
@@ -3601,7 +3578,6 @@ libmount 会先确定是否存在可以维护的 userspace mount table。
 
 utab 是 userspace 的补充记录，并不是内核执行 mount 所必需的。
 
----
 ##### 4. syscall 已经失败
 
 接下来是：
@@ -3636,7 +3612,6 @@ syscall_status == 1
 ```text
 syscall_status == 0
 ```
----
 #### 4.3 创建 `cxt->update`
 
 通过前面的检查后，如果 update handler 尚不存在：
@@ -3667,7 +3642,6 @@ mnt_update_set_filename()
 
 真正代表某一条 mount 记录的 `update->fs`，是在下面的 `mnt_update_set_fs()` 中进一步准备的。
 
----
 #### 4.4 `mnt_update_set_fs()`：准备本次 mount 的 utab 条目
 
 创建 update handler 后，`prepare_update()` 首先取得已经合并好的 mount flags：
@@ -3850,7 +3824,6 @@ utab 的字段及输出条件如下：
 
 **`SRC`、`TARGET`、`ROOT`、`ID` 等字段用于标识挂载条目，本身不会触发 utab 条目的创建。** 如果过滤后的 `OPTS` 和 `ATTRS` 均为空，`utab_new_entry()` 直接返回 `1`，不创建 `update->fs`，因此也不会单独写入上述标识字段。
 
----
 ### 5. `do_mount`：执行挂载
 
 `mnt_context_do_mount()` 负责执行已经准备好的挂载操作。本阶段不仅包括实际的 mount syscall，还包括挂载前的 hook、挂载后的 attach，以及部分特殊挂载所需的收尾操作。
@@ -4407,7 +4380,6 @@ mount_setattr(propagation = ...)
 
 `X-mount.owner/group/mode` 的参数解析和 hook 注册过程已在前面的 PREP_OPTIONS 章节3.5.3小节中介绍，这里只明确其最终执行时机。
 
----
 ### 6. `update_tabs()`：将挂载信息写入 utab
 
 **本步变动**：`mnt_context_update_tabs()` 根据挂载执行结果，决定是否将 `cxt->update` 中准备好的信息提交到 `/run/mount/utab`。实际更新由 `mnt_update_table(cxt->update, cxt->lock)` 完成，本阶段不再重新生成 `update->fs`。
