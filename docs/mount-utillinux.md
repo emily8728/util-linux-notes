@@ -1,7 +1,8 @@
 # util-linux `mount` 代码阅读笔记
-就 `mount` 命令而言，`util-linux` 的核心作用，是将用户输入与系统配置转化为可执行的挂载参数并交由内核执行，同时完成用户态结果记录。源码里面分为main函数（在mount.c中）和libmount库两层。
 
-本文基于util-linux-2.39.3版本编写，文中写法沿用 man page 节号：`mount(2)` 指内核 `mount` 系统调用（第 2 节）；`mount(8)` 指用户态挂载管理命令（第 8 节）。后文 `umount(8)`、`fsopen(2)` 等同理。
+就 `mount` 命令而言，util-linux 的核心作用，是将用户输入与系统配置转化为可执行的挂载参数并交由内核执行，同时完成用户态结果记录。源码主要分为 `mount.c` 中的 `main()` 入口层和 libmount 库两层。
+
+本文基于 util-linux-2.39.3 版本编写，文中写法沿用 man page 节号：`mount(2)` 指内核 `mount` 系统调用（第 2 节）；`mount(8)` 指用户态挂载管理命令（第 8 节）。后文 `umount(8)`、`fsopen(2)` 等同理。
 
 这是主要流程：
 
@@ -58,9 +59,7 @@ cxt = mnt_new_context();
 
 `cxt` 里比较关键的状态包括：
 
-<a id="table-1-1"></a>
-
-**表 1-1**　`main()` 写入 context 的主要状态
+**表 1-1** `main()` 写入 context 的主要状态
 
 | context 中的状态 | 命令行来源 | `main()` 中的设置方式 | 含义 |
 |------------------|------------|----------------------|------|
@@ -104,21 +103,19 @@ cxt = mnt_new_context();
 mount -o move ...
 ```
 
-不会作为普通 option 留在 optlist 中，而是由 main() 单独记录，最后通过：
-
-mnt_context_set_mflags(cxt, MS_MOVE);
-
-直接设置对应的 mount flag。
+不会作为普通 option 留在 optlist 中，而是由 `main()` 单独记录，最后通过：
 
 ```c
 mnt_context_set_mflags(cxt, MS_MOVE);
 ```
 
+直接设置对应的 mount flag。
+
 ### 2. restricted 与 setuid 安全模型
 
 当前很多 Linux 发行版里的 `/bin/mount` 仍然可能带有 setuid root。
 
-因此普通用户执行 mount 时，进程一开始可能会拥有 `effective uid = root`。
+因此普通用户执行 `mount` 时，进程一开始可能会拥有 effective uid = root。
 
 否则很多挂载相关操作无法继续，例如：
 
@@ -141,16 +138,13 @@ mnt_context_set_mflags(cxt, MS_MOVE);
 
 因此 libmount 并不会简单认为：
 
-> “当前 euid=root，  
-> 就完全按真正 root 用户处理”
+> “当前 euid=root，就完全按真正 root 用户处理”
 
 而是引入 restricted 语义。
 
 它的本质是：
 
-> 虽然 mount 当前暂时带有 setuid root 权限，  
-> 但这次挂载仍然被视为：  
-> “普通用户发起的受限挂载”
+> 虽然 mount 当前暂时带有 setuid root 权限，但这次挂载仍然被视为：“普通用户发起的受限挂载”
 
 因此在 restricted 模式下，libmount 会额外做一层用户态限制与检查。
 
@@ -222,11 +216,11 @@ argc == 2，option 阶段未写 source/target
     -> bad usage
 ```
 
-这里有一个容易忽略的限制：位置参数阶段可以补全尚未指定的 source 或 target，但不能重复指定已经存在的 source 或 target。源码并不会先判断两个值是否相同；只要同一个语义位置被指定了两次，就会按用法错误处理。例如：mount -L DATA UUID=xxxx或者mount --source /dev/sda1 /dev/sda1 /mnt都被认为是错误。
+这里有一个容易忽略的限制：位置参数阶段可以补全尚未指定的 source 或 target，但不能重复指定已经存在的 source 或 target。源码并不会先判断两个值是否相同；只要同一个语义位置被指定了两次，就会按用法错误处理。例如：`mount -L DATA UUID=xxxx` 或 `mount --source /dev/sda1 /dev/sda1 /mnt` 都会被认为是用法错误。
 
-#### restricted下显式给出source和target
+#### restricted 下显式给出 source 和 target
 
-restricted 对这段逻辑的影响不是“改变 source/target 的含义”，而是：当受限用户显式给出了完整 source + target 时，main() 会倾向于 suid_drop()，不再让这次命令继续借 setuid mount 代理身份执行。
+restricted 对这段逻辑的影响不是“改变 source/target 的含义”，而是：当受限用户显式给出了完整 source + target 时，`main()` 会倾向于 `suid_drop()`，不再让这次命令继续借 setuid mount 代理身份执行。
 
 比如：
 
@@ -256,9 +250,9 @@ source = /dev/sdb1
 target = /mnt
 ```
 
-在 restricted 场景下会 suid_drop()。
+在 restricted 场景下会 `suid_drop()`。
 
-#### restricted下真实用户能否解析路径
+#### restricted 下真实用户能否解析路径
 
 此后如果当前会话仍处于 `restricted` 状态，`main()` 还会调用：
 
@@ -266,7 +260,7 @@ target = /mnt
 sanitize_paths(cxt)
 ```
 
-这是因为历史上的 `mount` 程序通常带有 `setuid root` 属性，普通用户执行时，进程一度会拥有 `root` 的 `effective uid`。这样如果不额外检查，用户就可能借助 `mount` 的特权去解析自己本来无权访问的路径，例如：
+这是因为历史上的 `mount` 程序通常带有 setuid root 属性，普通用户执行时，进程一度会拥有 root 的 effective uid。这样如果不额外检查，用户就可能借助 `mount` 的特权去解析自己本来无权访问的路径，例如：
 
 - 指向他人目录的符号链接
 - 无法遍历的目录
@@ -274,8 +268,7 @@ sanitize_paths(cxt)
 
 本质上相当于：
 
-> “借 setuid mount 的权限，  
-> 偷看路径最终解析到了哪里”
+> “借 setuid mount 的权限，偷看路径最终解析到了哪里”
 
 因此，在 `restricted` 会话下，`sanitize_paths()` 会调用：
 
@@ -287,8 +280,7 @@ canonicalize_path_restricted()
 
 如果 `canonicalize` 失败，说明：
 
-> 在不借助 setuid 权限的情况下，  
-> 当前用户其实无法合法解析这条路径。
+> 在不借助 setuid 权限的情况下，当前用户其实无法合法解析这条路径。
 
 这时 `main()` 不会立刻报错，而是再次：
 
@@ -303,7 +295,6 @@ suid_drop(cxt);
 第一章在 `mount.c` 中完成命令行解析、restricted 检查，并将 source、target、options 等初始挂载信息写入 `libmnt_context`。本章继续进入 libmount，分析 `mnt_context_mount()` 如何准备挂载参数、执行实际挂载并更新 utab。
 
 ---
-
 ### 1. 从 `main()` 到 libmount 的交接
 
 第一章已经创建了本次操作使用的 context：
@@ -345,7 +336,6 @@ if (rc == -EPERM && mnt_context_is_restricted(cxt)
 `!mnt_context_syscall_called(cxt)` 则保证：如果第一次的 `EPERM` 已经来自实际的 mount syscall，就不会再进行这种重试。
 
 ---
-
 ### 2. `mnt_context_mount()` 总控
 
 `main()` 在 argv 分派、`sanitize_paths()`、`MS_MOVE` 等处理完成后调用：
@@ -406,10 +396,9 @@ cxt->update->fs
 `prepare_update` 创建更新对象并准备 `update->fs`；`do_mount` 执行真正的挂载，其中 new mount API 路径可在 mount 建立后取得 mount ID，而 filesystem type 需要逐项试挂载时，成功的 `try_type` 也会写入 `update->fs->fstype`；最后 `update_tabs` 将准备好的 entry 提交到 utab。
 
 ---
-
 ### 3. `prepare_mount`：按源码调用顺序展开
 
-`mnt_context_prepare_mount()` 在 `mnt_context_mount()` 内首先执行，把 main() 传入的 context 补全、校验，编译成可执行的挂载计划。子节按源码调用顺序编号。
+`mnt_context_prepare_mount()` 在 `mnt_context_mount()` 内首先执行，把 `main()` 传入的 context 补全、校验，编译成可执行的挂载计划。子节按源码调用顺序编号。
 
 总流程：
 
@@ -435,7 +424,7 @@ cxt->update->fs
 
 #### 3.1 `mnt_context_apply_fstab`：补全 source/target/options
 
-`mnt_context_apply_fstab` 是 `prepare_mount` 的第一步：根据当前 mount context 的 source / target / optsmode,
+`mnt_context_apply_fstab` 是 `prepare_mount` 的第一步：根据当前 mount context 的 source、target 和 optsmode，
 判断是否需要从 fstab 或 mountinfo 中查找已有记录，
 然后把找到的表项合并到当前 cxt->fs，
 用于补全 source、target、fstype、options 等信息，并将该行 options 按 optsmode 并入 `cxt->optlist`。
@@ -639,7 +628,6 @@ mount -a 每行：
 因此 `-c` **不是**「整个 libmount 都不 canonicalize」；只是 **mount context 这条挂载准备链路**不再自动整理字符串。例如 `evaluate_permissions` 里 `owner`/`group` 分支仍可能调 `mnt_resolve_spec` 做 `stat`，与 `prepare_srcpath` 策略并不完全一致。
 
 ---
-
 #### 3.2 `mnt_context_merge_mflags`：折叠 optlist
 
 在 `apply_fstab`（§3.1.4 把表项插/接到 optlist）之后、`evaluate_permissions` 之前执行。第一章已说明命令行 `-o` 先进 **optlist**；本节先交代 prepare 阶段要用的结构，再说本步做什么。
@@ -691,7 +679,7 @@ int mnt_context_merge_mflags(struct libmnt_context *cxt)
 
 ##### 3.2.3 选项从哪来、怎么分类
 
-`main()` 里 `-o` 只是字符串，**分类发生在** `mnt_context_append_options()` 解析时（见 [表 1-1](#table-1-1) 的 option list 行）：靠 `optlist->maps[]` 里注册的 `linux_flags_map` / `userspace_opts_map` 做 name 匹配（`optmap.c`）。map 表项类型如下：
+`main()` 里 `-o` 只是字符串，**分类发生在** `mnt_context_append_options()` 解析时（见表 1-1 的 option list 行）：靠 `optlist->maps[]` 里注册的 `linux_flags_map` / `userspace_opts_map` 做 name 匹配（`optmap.c`）。map 表项类型如下：
 
 ```c
 struct libmnt_optmap {
@@ -702,7 +690,7 @@ struct libmnt_optmap {
 ```
 
 - **`name`**：用来匹配选项字符串
-- **`id`**：对应的 `MS_*`（见 [表 1-1](#table-1-1) 的 mount flags 行）
+- **`id`**：对应的 `MS_*`（见表 1-1 的 mount flags 行）
 - **`mask`**：附加语义，取值见下表
 
 | mask | 作用 | 例子 |
@@ -718,15 +706,13 @@ struct libmnt_optmap {
 
 | 类别 | 识别方式 | 示例 | 主要消费者 |
 |------|----------|------|------------|
-| **VFS** | linux map 中无 `MNT_SUPERBLOCK`，且 **`get_attrs` 认得出**（能转成 `MOUNT_ATTR_*`；完整列表见 [3.2.4](#sec-3-2-4)） | `ro`、`nosuid`、`noatime` | map 里 id 仍是 `MS_*`（新旧共用）。新 API：`hook_set_vfsflags` 调 `get_attrs`，写入 `mount_setattr` 的 `attr_set`/`attr_clr`；legacy：`get_flags` → `mount(2)` 的 flags |
+| **VFS** | linux map 中无 `MNT_SUPERBLOCK`，且 **`get_attrs` 认得出**（能转成 `MOUNT_ATTR_*`；完整列表见 3.2.4） | `ro`、`nosuid`、`noatime` | map 里 id 仍是 `MS_*`（新旧共用）。新 API：`hook_set_vfsflags` 调 `get_attrs`，写入 `mount_setattr` 的 `attr_set`/`attr_clr`；legacy：`get_flags` → `mount(2)` 的 flags |
 | **传播** | linux map，`id` 带传播位（`MS_SHARED` / `MS_SLAVE` 等） | `shared`/`rshared`、`slave`/`rslave`、`private`、`unbindable` | **`get_attrs` 认不出**。新 API：`mount_setattr` 的 `propagation` 字段；legacy：额外的 `mount(2)`。常带 `MNT_NOHLPS`/`MNT_NOMTAB` |
 | **Superblock** | linux map + `MNT_SUPERBLOCK` | `sync`、`lazytime`、`dirsync` | map 里 id 也是 `MS_*`。新 API：`configure_superblock` → `fsconfig`；legacy：同样进 `mount(2)` 的 **flags** |
 | **FS 专有** | **不属于两张 builtin map，且不是 libmount 特殊识别的安全选项；由具体 filesystem 定义和解析** | ext4 的 `data=ordered`、`journal_checksum`；cifs 的 `vers=`、`sec=` | 新 API：`configure_superblock` 中按 name/value 调 `fsconfig`；legacy：拼成字符串作为 `mount(2)` 第 5 参，最终由具体 filesystem 解析 |
 | **安全** | **不属于两张 builtin map，但被 libmount 按 option name 专门识别** | SELinux：`context=`、`fscontext=`、`defcontext=`、`rootcontext=`、`seclabel`；Smack：`smackfsdef=` 等 | SELinux 由 `hook_selinux`（`PREP_OPTIONS`）做 context 翻译等预处理，再进入内核挂载流程；Smack 选项在 `fix_optstr` 里按名字表识别（未启用 Smack 时删除） |
 | **Userspace** | 命中 userspace 专用那张选项表 | `user`、`loop`、`X-mount.*`、`helper=`、`verity.*` 等 | 由 libmount 用户态逻辑消费：如 `loop` 准备 loop device、`verity.*` 准备 dm-verity device、`X-mount.idmap` 做 idmap、`user` 等用于 utab |
 | **操作类** | linux map 里 `id` 为 `MS_BIND` / `MS_MOVE` / `MS_REMOUNT` | `bind`/`rbind`、`move`、`remount` | 不设普通 VFS 属性，也不走超级块参数；而是决定 libmount 运行 bind、move 或 remount 的相应流程。可带 `MNT_NOMTAB` / `MNT_NOHLPS` |
-
-<a id="sec-3-2-4"></a>
 
 ##### 3.2.4 `get_attrs()`：VFS 选项 → `MOUNT_ATTR_*`
 
@@ -753,7 +739,6 @@ struct libmnt_optmap {
 **`nodiratime`：** 只抑制**目录**的 atime 更新，与上面三种 atime 策略独立，不走 `MOUNT_ATTR__ATIME` 互斥。
 
 ---
-
 #### 3.3 `mnt_fs_follow_optlist`：让 `fs` 跟随 context 的 `optlist`
 
 `mnt_context_merge_mflags()` 完成后，`prepare_mount()` 调用：
@@ -794,8 +779,8 @@ libmnt_fs
 所以这一步的核心作用可以概括为：
 
 > **`mnt_fs_follow_optlist()` 不生成第二份选项，而是让 `cxt->fs` 与 `cxt` 共享同一个 `optlist`；`cxt->optlist` 负责 mount 过程中的结构化选项处理，`fs` 则可以在需要时从这份 optlist 得到字符串形式的选项。**
----
 
+---
 #### 3.4 `evaluate_permissions`：处理用户挂载权限
 
 `evaluate_permissions()` 主要处理 `user`、`users`、`owner`、`group` 这些 userspace 选项所表达的普通用户挂载权限，并补充它们隐含的安全挂载标志：
@@ -1167,7 +1152,7 @@ MOUNT
 MOUNT_POST ────────────────→ 执行相应回调
 POST ──────────────────────→ 执行相应回调
 ```
-**本文对 hook 的命名约定：** 下文为方便区分不同的 hook 功能，统一使用 `hook_owner`、`hook_idmap`、`hook_selinux` 等名称。这些名称取自对应的源码文件名（如 `hook_owner.c`、`hook_idmap.c`），本文用它们作为各 hook 功能模块的简称，并非 libmount 中实际存在的同名函数。实际注册到 hook 框架中的回调函数通常是各模块内部的 hook_*() 函数，并通过 struct libmnt_hookset、执行阶段（MNT_STAGE_*）等信息组织和调用。
+**本文对 hook 的命名约定：** 下文为方便区分不同的 hook 功能，统一使用 `hook_owner`、`hook_idmap`、`hook_selinux` 等名称。这些名称取自对应的源码文件名（如 `hook_owner.c`、`hook_idmap.c`），本文用它们作为各 hook 功能模块的简称，并非 libmount 中实际存在的同名函数。实际注册到 hook 框架中的回调函数通常是各模块内部的 `hook_*()` 函数，并通过 `struct libmnt_hookset`、执行阶段（`MNT_STAGE_*`）等信息组织和调用。
 
 下面分别看这个阶段几个重要的 hook。
 
@@ -1697,7 +1682,7 @@ server:/path   → nfs
 
 探测得到类型后，还会检查 `X-mount.auto-fstypes=`。如果该选项限制了自动探测允许使用的 filesystem type，而实际探测结果不在允许范围内，则返回 `MNT_ERR_NOFSTYPE`。
 
-##### 3.7.2 后续的fstype处理
+##### 3.7.2 后续的 fstype 处理
 
 `mnt_context_guess_fstype()` 并不保证一定能探测出 filesystem type。源码明确允许探测结果为空，因为后面的挂载阶段还可以尝试其他类型。
 
@@ -1801,7 +1786,7 @@ pattern = NULL
 逐个尝试其中的候选类型
 ```
 
-此外，`prepare_mount()` 后面会调用（见3.9小节）：
+此外，`prepare_mount()` 后面会调用（见 3.9 小节）：
 
 ```c
 mnt_context_prepare_helper(cxt, "mount", NULL)
@@ -1854,15 +1839,17 @@ target-prefix = /mnt/root
 /mnt/root/etc
 ```
 
-接着通过 cache 和 mnt_resolve_path() 对 target 做 canonicalize：
+接着通过 cache 和 `mnt_resolve_path()` 对 target 做 canonicalize：
 
+```text
 /mnt/a/../data
         ↓
 mnt_resolve_path()
         ↓
 /mnt/data
+```
 
-这里不仅会处理 .、..，也会解析实际路径中的符号链接等路径关系。若解析后的路径发生变化，则重新写入：
+这里不仅会处理 `.`、`..`，也会解析实际路径中的符号链接等路径关系。若解析后的路径发生变化，则重新写入：
 
 ```c
 cxt->fs->target
@@ -1877,7 +1864,6 @@ mnt_context_call_hooks(cxt, MNT_STAGE_PREP_TARGET);
 这一阶段主要处理那些**必须等 target 确定以后才能完成**的 mount option。
 
 ---
-
 ##### 3.8.2 `hook_subdir`：处理 `X-mount.subdir`
 
 `X-mount.subdir=<path>` 用于只挂载 filesystem 中的某个子目录，而不是整个 filesystem root。
@@ -2007,7 +1993,7 @@ detached filesystem
 将 subdir 放到真正 target
 ```
 
-较新的内核与更新版 util-linux 可以简化这条路径：直接从 detached mount tree 取得`foo/bar` 并 attach 到最终 target。本文基于 util-linux 2.39.3，其中无论新/旧 mount API，subdir 仍先临时挂到 `/run/mount/tmptgt`，再 `open_tree()` 取得子目录。
+较新的内核与更新版 util-linux 可以简化这条路径：直接从 detached mount tree 取得 `foo/bar` 并 attach 到最终 target。本文基于 util-linux 2.39.3，其中无论新/旧 mount API，subdir 仍先临时挂到 `/run/mount/tmptgt`，再 `open_tree()` 取得子目录。
 
 ##### 3.8.3 `hook_mkdir`：处理 `X-mount.mkdir`
 
@@ -2072,7 +2058,6 @@ cxt->fs->target
 该功能只允许 root 或非 restricted 的 mount 使用；restricted mount 会返回 `EPERM`。
 
 ---
-
 ##### 3.8.4 `hook_selinux_target`：解析 `rootcontext=@target`
 
 SELinux 的：
@@ -2148,7 +2133,6 @@ PREP_OPTIONS
 因此这里把 SELinux 处理放在 `PREP_TARGET`，不是因为所有 SELinux option 都在这个阶段处理，而是因为 **`rootcontext=@target` 必须等 target 的最终路径确定、并且必要时已经由 `X-mount.mkdir` 创建之后，才能取得 target 的实际 SELinux context。**
 
 ---
-
 #### 3.9 `mnt_context_prepare_helper`：选择外部 mount helper
 
 前面的步骤已经基本确定了本次挂载的 source、target、fstype 和 options。接下来还有一个问题需要确定：
@@ -2329,7 +2313,6 @@ mnt_context_prepare_helper(cxt, "mount", try_type);
 所以 helper 的判断最终是针对**当前正在尝试的单个 fstype**完成的。
 
 ---
-
 ##### 3.9.2 `.subtype`：兼容基础类型的 helper
 
 FUSE 文件系统的 fstype 可以采用 `type.subtype` 形式，例如：
@@ -2458,7 +2441,6 @@ cxt->helper = NULL
 所以 helper 不是在 libmount 自己挂载之前额外执行的一步，而是**替代了 `do_mount()` 中 libmount 自己完成实际挂载的那条路径**。
 
 ---
-
 ##### 3.9.4 `exec_helper`：将 context 中的参数重新传给 helper
 
 进入 helper 路径后，真正执行挂载的程序从 libmount 变成了独立的 `mount.<type>`。前面 `mount` 已经解析过的参数保存在 `struct libmnt_context` 和 `optlist` 中，而新的 helper 程序无法直接读取这些数据，因此 `exec_helper()` 需要重新构造 helper 的命令行参数。
@@ -2551,7 +2533,7 @@ if (mnt_context_is_rdonly_umount(cxt))
 
 **第二类是从当前 cxt->optlist 重新生成 helper 的 -o 参数。**
 
-`-o` 与 `-n/-v` 不同，它不是根据一个 context 状态简单恢复，首先，对`cxt->optlist`进行user option整理，如果存在 user option，但没有 MNT_FL_SAVED_USER，则清除这个 option 当前的 value（可以参考3.4.2.4小节有MNT_FL_SAVED_USER的来源）。例如：
+`-o` 与 `-n/-v` 不同，它不是根据一个 context 状态简单恢复，首先，对 `cxt->optlist` 进行 user option 整理，如果存在 user option，但没有 `MNT_FL_SAVED_USER`，则清除这个 option 当前的 value（可以参考 3.4.2.4 小节有 `MNT_FL_SAVED_USER` 的来源）。例如：
 
 user=bo
    ↓
@@ -2693,10 +2675,9 @@ target namespace：
 也就是说，libmount **不是先进入 target namespace，再在里面 exec `mount.<type>`**；它回到 origin namespace 执行 helper，而需要操作的 target namespace则作为 `-N` 参数交给 helper。
 
 ---
-
 ##### 3.9.6 helper 与后续 utab 更新
 
-`exec_helper()` 返回后，流程回到 `mnt_context_do_mount()`去做挂载，然后调用去更新utab（见第6节）：
+`exec_helper()` 返回后，流程回到 `mnt_context_do_mount()`去做挂载，随后外层 `mnt_context_mount()` 调用去更新utab（见第6节）：
 
 ```c
 mnt_context_update_tabs(cxt);
@@ -2750,12 +2731,12 @@ syscall_status == 0               helper_status == 0
 
 执行到这里，source、target、fstype、options 和 helper 都已经确定。`prepare_mount()` 最后还要完成两件事：
 
-1. onlyonce 检查：如果设置了onlyonce flag,就要确认本次文件系统是否已经挂载，`mount -a` 默认启用 onlyonce（已在挂载则跳过）；单次 mount 一般不设。
-2. 调用 MNT_STAGE_PREP hooks，向 hook 链表**注册**后续 MOUNT / MOUNT_POST 回调。下面先说新的mount API和legacy的API `mount(2)` 的区别。
+1. onlyonce 检查：如果设置了 onlyonce flag，就要确认本次文件系统是否已经挂载，`mount -a` 默认启用 onlyonce（已在挂载则跳过）；单次 mount 一般不设。
+2. 调用 `MNT_STAGE_PREP` hooks，向 hook 链表**注册**后续 `MOUNT` / `MOUNT_POST` 回调。下面先说新的 mount API 和 legacy 的 API `mount(2)` 的区别。
 
-##### 3.10.1 新 mount API 与legacy `mount(2)` 的区别
+##### 3.10.1 新 mount API 与 legacy `mount(2)` 的区别
 
-之前有提到过新的mount API和legacy的API, 这一节详细介绍这两者的区别，
+之前有提到过新的 mount API 和 legacy 的 API，这一节详细介绍这两者的区别，
 下面这些：
 
 ```text
@@ -2994,7 +2975,8 @@ source 的比较还处理了设备号、loop backing file 等特殊情况；NFS�
 ```c
 mnt_context_call_hooks(cxt, MNT_STAGE_PREP);
 ```
-这里，如果支持新的API，也就是打开了USE_LIBMOUNT_MOUNTFD_SUPPORT（从版本2.39开始）宏，MNT_STAGE_PREP 里面注册有两个hook：一个`hook_mount`使用新的mount API； 一个`hook_mount_legacy`使用legacy的API。
+
+这里，如果支持新的 API，也就是打开了 `USE_LIBMOUNT_MOUNTFD_SUPPORT`（从版本 2.39 开始）宏，`MNT_STAGE_PREP` 里面注册有两个 hook：一个 `hook_mount` 使用新的 mount API；一个 `hook_mount_legacy` 使用 legacy 的 API。
 
 `MNT_STAGE_PREP` 执行时，先执行 `hook_mount`；本次挂载的选项已经整理在 `optlist` 中。`hook_mount` 从中取得两类已经归并好的标志：
 
@@ -3377,7 +3359,6 @@ MNT_FL_PREPARED
 后面的 `mnt_context_do_mount()` 才进入 MOUNT 阶段，执行这里已经确定并注册好的挂载操作。
 
 ---
-
 ### 4. `prepare_update`：准备 utab 更新信息
 
 `mnt_context_prepare_update()` 负责判断本次操作是否需要更新 userspace mount table；如果需要，则创建 `cxt->update`，并通过 `mnt_update_set_fs()` 准备后续更新 utab 所需的信息。
@@ -3410,7 +3391,6 @@ cxt->update
 * **`update->fs`**：根据当前 `cxt->fs` 准备出来的 utab 条目，后续 `update_tabs` 会以它为基础更新 utab。
 
 ---
-
 #### 4.1 为什么在 `do_mount` 之前准备
 
 `prepare_update` 放在实际挂载之前，并不是提前写 utab，而是提前准备**内存中的更新信息**。
@@ -3445,7 +3425,6 @@ mnt_update_set_fs()
 上层调用链因此停止，不必等到实际 mount syscall 后才发现问题。
 
 ---
-
 ##### 2. 将 utab 信息与后续的临时挂载改动隔离
 
 这是 `prepare_update` 放在 `do_mount` 前面更重要的原因之一。
@@ -3493,7 +3472,6 @@ cxt->fs
 因此 `update->fs` 与实际挂载过程中继续使用的 `cxt->fs` 是分开的。
 
 ---
-
 ##### 3. 挂载过程中仍可回填最终结果
 
 提前建立 `update->fs` 并不意味着它此后完全不能变化。
@@ -3541,7 +3519,6 @@ update_tabs 最终提交
 所以 `update->fs` 更准确地说，是**挂载前建立、挂载过程中允许补充最终结果的 utab 更新项**。
 
 ---
-
 #### 4.2 哪些情况会跳过 utab 更新准备
 
 `mnt_context_prepare_update()` 并不是每次都会创建 `cxt->update`。
@@ -3571,7 +3548,6 @@ if (mnt_context_propagation_only(cxt)) {
 因为这里只是在修改已有 mount tree 的传播属性，不需要为此准备新的 utab 更新项。
 
 ---
-
 ##### 2. NOMTAB
 
 随后检查：
@@ -3598,7 +3574,6 @@ if (cxt->action == MNT_ACT_UMOUNT &&
 对于本章讨论的 mount 路径，主要关注前面的 `mnt_context_is_nomtab()` 判断即可。
 
 ---
-
 ##### 3. 没有 writable table
 
 接着：
@@ -3627,7 +3602,6 @@ libmount 会先确定是否存在可以维护的 userspace mount table。
 utab 是 userspace 的补充记录，并不是内核执行 mount 所必需的。
 
 ---
-
 ##### 4. syscall 已经失败
 
 接下来是：
@@ -3663,7 +3637,6 @@ syscall_status == 1
 syscall_status == 0
 ```
 ---
-
 #### 4.3 创建 `cxt->update`
 
 通过前面的检查后，如果 update handler 尚不存在：
@@ -3695,7 +3668,6 @@ mnt_update_set_filename()
 真正代表某一条 mount 记录的 `update->fs`，是在下面的 `mnt_update_set_fs()` 中进一步准备的。
 
 ---
-
 #### 4.4 `mnt_update_set_fs()`：准备本次 mount 的 utab 条目
 
 创建 update handler 后，`prepare_update()` 首先取得已经合并好的 mount flags：
@@ -3789,7 +3761,7 @@ mnt_fs_get_attributes(fs)
 
 这里的 `ATTRS` 是 libmount 为挂载条目额外保存的**用户空间属性信息**，供后续用户空间程序读取和使用。这些信息不属于内核 `mountinfo` 记录的挂载状态，因此需要由 utab 补充保存，对应字段为 `ATTRS=`。
 
-需要将它与 **[3.2.4](#sec-3-2-4) 节介绍的 VFS mount attributes** 区分开来：
+需要将它与 **3.2.4 节介绍的 VFS mount attributes** 区分开来：
 
 - `mnt_optlist_get_attrs()`：从结构化 VFS options 中取得 `MOUNT_ATTR_*` 标志，如 `MOUNT_ATTR_RDONLY`、`MOUNT_ATTR_NOSUID`，用于后续通过 `mount_setattr()` 设置内核 mount 属性。
 - `mnt_fs_get_attributes()`：取得 `fs->attrs` 中的用户空间属性信息，用于准备 utab 的 `ATTRS=` 字段。
@@ -3988,11 +3960,11 @@ fstype 的完整选择规则见 **3.7 节**。这里重点说明最终进入的�
 mnt_context_call_hooks(cxt, MNT_STAGE_MOUNT);
 ```
 
-执行此前（见3.10的`hookset_mount`）注册到 `MNT_STAGE_MOUNT` 的 hook。
+执行此前（见 3.10 的 `hookset_mount`）注册到 `MNT_STAGE_MOUNT` 的 hook。
 
 对于新 mount API，这些 hook 根据本次操作类型完成 filesystem 的创建或重新配置，以及 VFS mount 属性的设置。不同操作注册的 hook 不完全相同，例如普通新建 filesystem 会执行 `hook_create_mount()`，需要设置 VFS mount 属性时还会执行 `hook_set_vfsflags()`。
 
-新 mount API 的各个 hook 通过 `get_sysapi()` 取得当前 `cxt` 中 `hookset_mount` 的共享数据 `struct libmnt_sysapi`，由3.10.3 `MNT_STAGE_PREP`阶段的`init_sysapi()` 函数创建，下文简称 `api`。其中：
+新 mount API 的各个 hook 通过 `get_sysapi()` 取得当前 `cxt` 中 `hookset_mount` 的共享数据 `struct libmnt_sysapi`，由 3.10.3 `MNT_STAGE_PREP` 阶段的 `init_sysapi()` 函数创建，下文简称 `api`。其中：
 
 - `api->fd_fs` 保存 `fsopen()` / `fspick()` 取得的 filesystem FD；
 - `api->fd_tree` 保存 `fsmount()` / `open_tree()` 取得的 mount tree FD。
@@ -4003,7 +3975,7 @@ mnt_context_call_hooks(cxt, MNT_STAGE_MOUNT);
 
 `hook_create_mount()` 是前面 3.10 节介绍的 `hook_mount()` 在普通新建 filesystem 场景下注册到 `MNT_STAGE_MOUNT` 的 hook。完整的创建流程已经在 3.10.3.1 说明，这里只看 `hook_create_mount()` 自身完成的工作。
 
-进入 `hook_create_mount()` 时，PREP 阶段的 `init_sysapi()` 已经执行（见3.10.3节）：
+进入 `hook_create_mount()` 时，PREP 阶段的 `init_sysapi()` 已经执行（见 3.10.3 节）：
 
 ```c
 fsopen(fstype, ...)
@@ -4118,7 +4090,7 @@ cxt->update->fs->id
 
 ##### 5.4.2 remount：`hook_reconfigure_mount()`
 
-普通 remount（这里指不带bind的）因为不创建新的 filesystem，所以不会注册普通新建 filesystem：`hook_create_mount()`，而会注册重新配置 target 上已经存在的 mount的函数：`hook_reconfigure_mount()`。普通remount的流程见3.10.3.3小节，这里不再详细说明，主要只讲`hook_reconfigure_mount()`。
+普通 remount（这里指不带 bind 的）因为不创建新的 filesystem，所以不会注册普通新建 filesystem：`hook_create_mount()`，而会注册重新配置 target 上已经存在的 mount 的函数：`hook_reconfigure_mount()`。普通 remount 的流程见 3.10.3.3 小节，这里不再详细说明，主要只讲 `hook_reconfigure_mount()`。
 
 前面的 PREP 阶段中，`init_sysapi()` 已经通过 `open_tree(target)` 取得现有 mount，并保存到 `api->fd_tree`。进入 MOUNT 阶段后，`hook_reconfigure_mount()` 首先通过 `fspick()` 从这个 mount tree 取得 filesystem configuration context：
 
@@ -4237,7 +4209,7 @@ remount_reset =
 
 因此，**非递归的普通 remount 为兼容旧 API 而复位部分未指定属性；递归操作采用新 API 的显式修改语义，只改变用户指定的属性。** `remount,bind` 同样不执行 `remount_reset`。
 
-##### 5.4.4 传统 mount(2)：属于hook_mount_legacy()
+##### 5.4.4 传统 `mount(2)`：属于 `hook_mount_legacy()`
 
 PREP 阶段会依次处理 `hookset_mount`（新 API）和 `hookset_mount_legacy`（旧 API）。如果新 API 初始化成功，就使用新 API hooks；如果初始化失败且允许回退，则清理新 API hooks，由后续的 legacy hookset 注册 `mount(2)` 操作。
 
@@ -4247,7 +4219,7 @@ PREP 阶段会依次处理 `hookset_mount`（新 API）和 `hookset_mount_legacy
 - btrfs 挂载包含 SELinux 选项，需要使用兼容的 legacy 路径。
 - 内核版本低于 5.14，且本次 remount 涉及新 API 的 VFS 属性设置兼容问题。
 
-与新 API 分阶段调用 `fsconfig()`、`fsmount()`、`mount_setattr()` 的方式不同，legacy `mount(2)` 在其接口语义下集中提交这些挂载参数，具体见3.10.1小节。
+与新 API 分阶段调用 `fsconfig()`、`fsmount()`、`mount_setattr()` 的方式不同，legacy `mount(2)` 在其接口语义下集中提交这些挂载参数，具体见 3.10.1 小节。
 
 #### 5.5 `MNT_STAGE_MOUNT_POST`：attach 与挂载后处理
 
@@ -4312,9 +4284,9 @@ mount -o remount,X-mount.idmap=b:0:1000:1 /mnt/data
 
 ##### 5.5.2 subdir：恢复真实 target 并提取子目录
 
-对于前面在 `MOUNT_PRE` 中建立了 tmptgt 的 subdir 挂载，注册的 `hook_mount_post()` 会继续完成子目录挂载。注意`hook_mount_post()`由于是在`MOUNT_PRE` 中建立的，比`MNT_STAGE_PREP`阶段要晚，所以会在`MNT_STAGE_PREP`阶段挂载的`hook_attach_target()`后面执行，此时，tmptgt已经挂载。
+对于前面在 `MOUNT_PRE` 中建立了 tmptgt 的 subdir 挂载，注册的 `hook_mount_post()` 会继续完成子目录挂载。注意 `hook_mount_post()` 由于是在 `MOUNT_PRE` 中建立的，比 `MNT_STAGE_PREP` 阶段要晚，所以会在 `MNT_STAGE_PREP` 阶段挂载的 `hook_attach_target()` 后面执行，此时 tmptgt 已经挂载。
 
-subdir的全过程见3.8.2小节，这里只是说明其在`MNT_STAGE_MOUNT_POST`的执行过程，如下：
+subdir 的全过程见 3.8.2 小节，这里只是说明其在 `MNT_STAGE_MOUNT_POST` 的执行过程，如下：
 
 ```text
 mnt_fs_set_target(cxt->fs, org_target)
@@ -4436,7 +4408,6 @@ mount_setattr(propagation = ...)
 `X-mount.owner/group/mode` 的参数解析和 hook 注册过程已在前面的 PREP_OPTIONS 章节3.5.3小节中介绍，这里只明确其最终执行时机。
 
 ---
-
 ### 6. `update_tabs()`：将挂载信息写入 utab
 
 **本步变动**：`mnt_context_update_tabs()` 根据挂载执行结果，决定是否将 `cxt->update` 中准备好的信息提交到 `/run/mount/utab`。实际更新由 `mnt_update_table(cxt->update, cxt->lock)` 完成，本阶段不再重新生成 `update->fs`。

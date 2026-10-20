@@ -1,12 +1,15 @@
-# Linux mount 内核机制：super_block 与 mount（Linux 6.6）
+# Linux mount 内核机制：`super_block` 与 `mount`（Linux 6.6）
 
 上一篇介绍了 util-linux 中 `mount` 命令及 libmount 的执行流程。本文接续用户态的挂载过程，聚焦内核中的两个核心对象：`struct super_block` 描述文件系统实例，`struct mount` 描述挂载关系。在此基础上，介绍文件系统实例的创建与复用、挂载树的组织与传播，以及 VFS 如何通过挂载点完成路径解析。
 
 > **版本说明**：上一篇用户态文章基于 util-linux 2.39.3 源码分析；本文主要参考 Linux v6.6 相关的公开技术资料，并结合部分内核源码进行核对。
 >
 > **代码说明**：文中的结构体仅摘录与主题相关的字段，流程图及标为“示意”的代码用于辅助理解对象关系和执行流程，不代表 Linux v6.6 的完整源码实现。
-## 一、super_block
+
+## 一、`super_block`
+
 表示一个已激活的文件系统实例 `super_block`，通过这个结构体，它承载 VFS 与具体文件系统实现之间的连接。
+
 ```c
 /* 下面只列出与本章讨论相关的关键字段，不是完整定义 */
 struct super_block {
@@ -18,8 +21,11 @@ struct super_block {
     void                          *s_fs_info;
 };
 ```
-### 1. super_block 的本质及与磁盘 super block 的关系
-super_block 是 VFS 定义的通用文件系统实例对象。VFS 负责分配 super_block，具体文件系统在挂载回调中完成初始化。
+
+### 1. `super_block` 的本质及与磁盘 super block 的关系
+
+`super_block` 是 VFS 定义的通用文件系统实例对象。VFS 负责分配 `super_block`，具体文件系统在挂载回调中完成初始化。
+
 #### 1.1 磁盘上的 super block
 磁盘上的固定位置也有一个 super block，它是整个文件系统的全局磁盘元数据入口。文件系统必须在磁盘上保存一份全局布局描述信息，否则内核无法知道：
 - block size
@@ -53,7 +59,7 @@ ext4 的主 superblock 位于文件系统起始处偏移 1024 字节：
 - 若块大小为 1KiB，通常位于 block 1；
 - 若块大小大于 1KiB，通常位于 block 0 内部的 1024 字节偏移处。
 
-#### 1.2 mount 时两者如何关联
+#### 1.2 `mount` 时两者如何关联
 
 ```text
 获取或创建 VFS super_block
@@ -85,7 +91,6 @@ ext4_super_block
 ext4_group_desc[]
 journal inode
 
-
 内存
 ────────────────────────────────────
 struct super_block
@@ -115,8 +120,9 @@ struct ext4_sb_info
 - **直接读取或转换**：例如 `s_blocks_per_group`、`s_inodes_per_group`、`s_inode_size`，其来源是磁盘 superblock 中的对应字段。
 - **计算或初始化**：例如 `s_groups_count`、`s_desc_per_block`、`s_journal`，由磁盘元数据结合文件系统初始化逻辑建立。
 
-### 2. fs_context 与 super_block 的建立、初始化及重新配置
-### 2.1 `fs_context`：文件系统挂载与重新配置的上下文
+### 2. `fs_context` 与 `super_block` 的建立、初始化及重新配置
+
+#### 2.1 `fs_context`：文件系统挂载与重新配置的上下文
 
 `fs_context` 是 VFS 在创建或重新配置 `super_block` 时使用的上下文，用于保存本次操作的配置参数及相关状态。
 
@@ -158,7 +164,7 @@ VFS 创建 `fs_context` 后调用 `ext4_init_fs_context()`，该函数主要完�
 - 传统 `mount(2)`：每次 mount 或 remount 创建新的 `fs_context`，操作结束后释放。
 - 新 mount API：`fsopen()` 返回文件描述符，通过对应 `struct file->private_data` 引用 `fs_context`，后续 `fsconfig()` 等操作可以继续使用它。一次挂载完成后，其 ext4 私有配置可以先清理，而 `fs_context` 对象仍由文件描述符持有。
 
-### 2.2 `fs_context_operations`：文件系统配置操作函数
+#### 2.2 `fs_context_operations`：文件系统配置操作函数
 
 `fs_context->ops` 指向 `struct fs_context_operations`，它定义了文件系统如何解析挂载参数、取得文件系统树以及重新配置已有实例。
 
@@ -198,15 +204,15 @@ VFS 将挂载参数传递给该函数，ext4 根据参数名称和值进行解�
 
 **`ext4_reconfigure()`：重新配置已有文件系统**
 
-在文件系统级 remount 中，VFS 通过 `reconfigure_super()` 调用 `ext4_reconfigure()`，将已经解析的配置应用到已有的 ext4 文件系统实例。具体流程见2.3.2。
+在文件系统级 remount 中，VFS 通过 `reconfigure_super()` 调用 `ext4_reconfigure()`，将已经解析的配置应用到已有的 ext4 文件系统实例。具体流程见 2.3.2。
 
 **`ext4_fc_free()`：清理 ext4 配置上下文**
 
 该函数释放 `fc->fs_private` 中的 ext4 私有配置资源。比如一次挂载完成之后。
 
-### 2.3 mount 与 remount：创建和重新配置 `super_block`
+#### 2.3 `mount` 与 remount：创建和重新配置 `super_block`
 
-#### 2.3.1 mount：创建和初始化 `super_block`
+##### 2.3.1 `mount`：创建和初始化 `super_block`
 
 mount 流程中，VFS 提供通用挂载框架，具体文件系统通过回调函数参与关键步骤的实现。
 super_block 在 mount 过程中的创建和初始化过程如图（以ext4为例）：
@@ -408,7 +414,7 @@ failed:
 }
 ```
 
-#### 2.3.2 remount：重新配置已有 `super_block`
+##### 2.3.2 remount：重新配置已有 `super_block`
 
 mount 建立文件系统实例后，仍可以通过 remount 修改部分文件系统配置，而不必重新创建 `super_block`。
 
@@ -456,7 +462,8 @@ put_fs_context()
 
 重新配置成功后，原有的 `super_block`、`s_root` 和 `s_fs_info` 仍然存在；本次 remount 创建的 `fs_context` 则通过 `put_fs_context()` 清理。
 
-### 3. super_block 中主要变量解析
+### 3. `super_block` 中主要变量解析
+
 #### 3.1 `s_type` —— 文件系统类型对象
 
 `s_type` 表示当前 `super_block` 属于哪种文件系统类型，它指向 `struct file_system_type`。后者描述文件系统类型的名称、挂载配置入口、支持的特性以及文件系统实例的关闭回调。
@@ -517,9 +524,10 @@ static struct file_system_type ext4_fs_type = {
   - `FS_REQUIRES_DEV`：表示该文件系统需要块设备。对于 `mount -t ext4 /dev/sdb1 /mnt`，`ext4_get_tree()` 通过 `get_tree_bdev()` 取得块设备并创建或复用 `super_block`。`FS_REQUIRES_DEV` 同时用于 VFS 的文件系统类型分类，例如 `/proc/filesystems` 会据此区分需要设备的文件系统与 `nodev` 文件系统。
   - `FS_ALLOW_IDMAP`：表示 ext4 支持 idmapped mount。VFS 在为 mount 设置 ID 映射时检查该标志；如果文件系统类型没有声明支持，则不能为其设置这种 ID 映射。
 
-- **`owner`**：指向提供该文件系统类型的内核模块，ext4 设置为 THIS_MODULE。 VFS 通过 try_module_get()、__module_get() 和 module_put() 管理该模块的引用计数，保证挂载上下文或文件系统实例仍需要 ext4 代码时，模块不能被正常卸载。owner 本身只是模块指针，不是引用计数。
+- **`owner`**：指向提供该文件系统类型的内核模块，ext4 设置为 `THIS_MODULE`。VFS 通过 `try_module_get()`、`__module_get()` 和 `module_put()` 管理该模块的引用计数，保证挂载上下文或文件系统实例仍需要 ext4 代码时，模块不能被正常卸载。`owner` 本身只是模块指针，不是引用计数。
 
-#### 3.2 s_root —— 文件系统实例的根对象
+#### 3.2 `s_root` —— 文件系统实例的根对象
+
 ```c
 struct dentry *s_root;
 ```
@@ -544,7 +552,7 @@ if (!sb->s_root)
 3. **`sb->s_root = …`**  
    把上述根 dentry 记入 `super_block->s_root`，供后续路径解析与 `mnt_root` 等引用。
 
-#### 3.3 s_op —— 文件系统的操作函数
+#### 3.3 `s_op` —— 文件系统的操作函数
 const struct super_operations *s_op 负责文件系统实例级（super_block级）行为，以及 inode 对象在内存中的生命周期管理和回写控制。
 ```c
 /* 只列出本章关心的典型回调，非完整且非精确逐字定义 */
@@ -594,7 +602,7 @@ ext4_new_inode()
     ↓
 sb->s_op->alloc_inode           ← super_operations
     ↓
-ext4_alloc_inode()              
+ext4_alloc_inode()
     ↓
 初始化 inode（mode/uid/gid/nlink）
     ↓
@@ -874,7 +882,7 @@ kmem_cache_free()
 这里可以看到：
 - `dir->i_op->unlink`：属于 `inode_operations`，负责删除“文件名 → inode”的目录项关联，并减少目标 inode 的 `i_nlink`。
 - `sb->s_op->evict_inode`：属于 `super_operations`，负责清理 inode 的 page cache 等内存资源；在本图 `i_nlink == 0` 的删除路径中，还负责释放磁盘上的文件数据块、inode 分配资源及相关元数据资源。
-- `sb->s_op->destroy_inode`：检查 ext4 inode 的 orphan 链表、预留数据块等状态是否已正确清理。。
+- `sb->s_op->destroy_inode`：检查 ext4 inode 的 orphan 链表、预留数据块等状态是否已正确清理。
 - `sb->s_op->free_inode`：属于 `super_operations`，由 `ext4_free_in_core_inode()` 最终释放内存中的 `ext4_inode_info` 对象，其中包含 VFS 的 `struct inode`。
 
 **示例 D：chmod/chown/touch：通过 `i_op->setattr` 修改 inode 属性**
@@ -995,7 +1003,7 @@ ext4_get_tree()
 get_tree_bdev()                      ← VFS
     创建或复用 super_block
     ↓
-ext4_fill_super()                    
+ext4_fill_super()
     ↓
 初始化 sb->s_fs_info
     ↓
@@ -1090,7 +1098,8 @@ ext4_statfs()
 ```
 
 这里可以看到，`super_operations->statfs` 提供文件系统级统计信息；ext4 通过 `ext4_statfs()` 返回相关统计结果。
-#### 3.4 `s_flags` —— super_block 的状态与行为标志
+
+#### 3.4 `s_flags` —— `super_block` 的状态与行为标志
 
 `super_block->s_flags` 是一个位掩码，用于记录文件系统实例的状态及部分通用行为选项。内核通过检查相应标志位，决定是否允许写入、是否采用同步写入方式，以及如何处理文件时间戳等。
 
@@ -1149,7 +1158,7 @@ VFS 判断某个 mount 是否只读时，会同时检查 `MNT_READONLY` 和 `SB_
 - **单个 mount 级参数**：例如 `nosuid`、`nodev`、`noexec`，由 VFS 处理，转换为 `MNT_NOSUID`、`MNT_NODEV`、`MNT_NOEXEC`，最终保存在对应 mount 的 `mnt_flags` 中。
 - **文件系统专有参数**：例如 ext4 的 `data=ordered`，由 `ext4_parse_param()` 解析，结果保存在 `fs_context->fs_private` 指向的 `ext4_fs_context` 中。首次挂载时，由 `ext4_fill_super()` 将配置应用到 `super_block->s_fs_info` 指向的 `ext4_sb_info`；重新挂载时，则由 `ext4_reconfigure()` 更新已有文件系统实例的配置。
 
-### 3.4 s_bdev —— 该实例使用的底层设备对象
+#### 3.5 `s_bdev` —— 该实例使用的底层设备对象
 
 ```c
 struct block_device *s_bdev;
@@ -1228,7 +1237,7 @@ driver 实现（nvme / sd / virtio_blk）
 
 blk-mq 通过这个回调将 `request` 交给驱动处理。
 
-#### 3.4.2 Block Layer 内部流程
+##### 3.5.1 Block Layer 内部流程
 
 Block Layer 是 Linux 内核负责处理块 I/O 的子系统。它接收文件系统提交的 `bio`，通过 blk-mq 完成请求组织、可选调度及向设备驱动派发。
 
@@ -1370,7 +1379,7 @@ struct request_queue *q = sb->s_bdev->bd_disk->queue;
 
 一个 `request_queue` 同一时刻最多启用一个 I/O scheduler，也可以不启用（`none`）。启用调度器不代表所有请求都必须经过调度器，例如 passthrough 请求可以绕过调度器。
 
-### 3.5 s_fs_info —— 文件系统私有运行时数据
+#### 3.6 `s_fs_info` —— 文件系统私有运行时数据
 
 ```c
 void *s_fs_info;
@@ -1440,7 +1449,7 @@ struct ext4_sb_info {
 
 因此，`sb->s_fs_info` 是 **filesystem instance 的文件系统私有运行时数据的主要入口**。
 
-## 二、mount / vfsmount
+## 二、`mount` / `vfsmount`
 本文件系统被挂在 VFS 树的位置结构体。例如执行 `mount /dev/sda1 /mnt`，一个 ext4 文件系统实例被挂在目录 `/mnt` 上，这件事就由 `struct mount` 描述。
 ```c
 // 只列出和文中所讲相关主要字段
@@ -1475,7 +1484,9 @@ struct dentry {
 };
 ```
 请注意，这里 `vfsmount` 里面的 `*mnt_sb` 就是指向第一小节说的 `struct super_block`，这就让这两个结构体产生了关联。下面分别介绍其它字段：
+
 ### 1. `mnt_root`
+
 ```c
 struct dentry *mnt_root;
 ```
@@ -1505,7 +1516,8 @@ mnt_root
 ```
 挂载整个文件系统时两者通常相同；bind mount、Btrfs subvolume mount 等情况下，两者可以不同。
 
-### 2. mnt_mountpoint
+### 2. `mnt_mountpoint`
+
 ```c
 struct dentry *mnt_mountpoint;
 ```
@@ -1515,7 +1527,8 @@ mount /dev/sda1 /mnt
 ```
 则 `mnt_mountpoint` 指向 `/mnt` 的 dentry。
 
-### 3. mnt_parent
+### 3. `mnt_parent`
+
 `mnt_parent` 表示当前这个 mount 是挂在哪个 mount 上面的。也就是说，mount 之间自己也形成一棵树。
 
 所以：
@@ -1523,7 +1536,7 @@ mount /dev/sda1 /mnt
 - `mnt_mountpoint` 描述在父 mount 的哪个 dentry 上挂进去
 - `mnt.mnt_root` 描述这个子 mount 自己的根 dentry
 
-### 4. mnt_hash
+### 4. `mnt_hash`
 一个系统中可能有几十到几百个 `mount`，容器环境中甚至可能有上千个。如果每次查找都遍历全部 `mount`，效率会很差，所以内核维护了 hash table。`mnt_hash` 就是 `mount` 挂在内核 hash bucket 链表中的节点，用于在路径解析或挂载管理时快速定位对应的 `mount` 对象。它的结构：
 ```c
 struct hlist_node {
@@ -1564,10 +1577,10 @@ hlist_for_each_entry(mnt, bucket, mnt_hash) {
 
 | 类型 | 含义 |
 |------|------|
-| shared | 双向传播 |
-| slave | 单向接收传播 |
-| private | 完全不传播 |
-| unbindable | 不允许再被 bind mount |
+| `shared` | 双向传播 |
+| `slave` | 单向接收传播 |
+| `private` | 完全不传播 |
+| `unbindable` | 不允许再被 bind mount |
 
 ```bash
 mount --make-shared /path
@@ -1578,7 +1591,7 @@ mount --make-unbindable /path
 
 以下按类型说明。
 
-##### shared
+##### `shared`
 
 `mount --make-shared /mnt` 之后，`/mnt` 一侧的 mount 成为 **shared mount**：落在同一 **peer group** 里的 mount 之间，会互相转发「子树里新增 / 拆掉 mount」这类变化。
 
@@ -1592,7 +1605,7 @@ mount B : shared:17
 → A 与 B 在同一 peer group：A 下新增 mount 会传到 B，反之亦然。
 ```
 
-##### slave
+##### `slave`
 
 **slave** 只**接收**来自 **master** 的传播，**不**把本侧变化回传。
 
@@ -1604,7 +1617,7 @@ B (slave)
 
 容器里常见：宿主或上层 mount 树为 master，容器内子树为 slave。
 
-##### private
+##### `private`
 
 **private** 不参与传播：既不接收其它 mount 传播来的挂载事件，也不向其它 mount 传播发生在自身挂载范围内的挂载事件。已有子 mount 的传播属性不受影响；若要将整棵子挂载树都设为 private，应使用 `mount --make-rprivate /mnt`。
 
@@ -1614,7 +1627,7 @@ mount --make-private /mnt
 
 之后 `/mnt` 这个 mount 不再参与挂载传播；其已有子 mount 的传播属性不变。
 
-##### unbindable
+##### `unbindable`
 
 **unbindable** 表示该 mount **不能**再作为 bind mount 的源被复制，用于避免某些拓扑下形成难以拆开的绑定关系。执行 recursive bind（`rbind`）时，源树中的 unbindable 子挂载会被排除。
 
@@ -1646,7 +1659,8 @@ mount --make-private /mnt
 - **private**：无 `MNT_SHARED` / `MNT_UNBINDABLE`，也无 master 传播关系。
 - **unbindable**：`mnt.mnt_flags` 含 `MNT_UNBINDABLE`。
 
-### 6. mnt_ns
+### 6. `mnt_ns`
+
 **`mnt_ns`**，类型为 `struct mnt_namespace *`，表示**这个 mount 结点登记在哪个 mount namespace 里**（创建/切换时常说 `CLONE_NEWNS`；与 pid、net 等其它 namespace 不是一类东西）。
 
 **mount namespace** 用来隔离进程看到的挂载关系：不同 mount namespace 可有不同挂载关系，因此两个进程即使访问同一路径字符串，也可能看到不同内容。
@@ -1828,7 +1842,7 @@ inode = d_inode(path.dentry); /* inode 属于 ext4 */
 - 参与 mount namespace 的 clone / destroy，与挂载视图的生命周期绑定；
 - 通过 `/proc/.../mountinfo` 等接口向用户态导出当前挂载视图。
 
-## 三. super_block 与 mount 的整体关系
+## 三、`super_block` 与 `mount` 的整体关系
 从内核对象看，挂载需要把一个文件系统实例与挂载关系关联起来：`super_block` 描述文件系统实例，`mount` 引用它并描述本次挂载在挂载树中的位置。并非每次执行 `mount` 都新建 `super_block`：已有实例可被复用，bind mount 也会引用已有实例。因此，一个 `super_block` 可以对应多个 `mount`。
 例如：
 ```bash
