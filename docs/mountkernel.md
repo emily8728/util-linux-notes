@@ -1,6 +1,6 @@
 # Linux mount 内核机制：`super_block` 与 `mount`（Linux 6.6）
 
-上一篇介绍了 util-linux 中 `mount` 命令及 libmount 的执行流程。本文接续用户态的挂载过程，聚焦内核中的两个核心对象：`struct super_block` 描述文件系统实例，`struct mount` 描述挂载关系。在此基础上，介绍文件系统实例的创建与复用、挂载树的组织与传播，以及 VFS 如何通过挂载点完成路径解析。
+上一篇介绍了 util-linux 中 `mount` 命令及 libmount 的执行流程。本文接着往内核看，聚焦两个核心对象：`struct super_block` 描述文件系统实例，`struct mount` 描述挂载关系；并由此说明文件系统实例如何创建与复用、挂载树如何组织与传播，以及 VFS 如何借助挂载点完成路径解析。
 
 > **版本说明**：上一篇用户态文章基于 util-linux 2.39.3 源码分析；本文主要参考 Linux v6.6 相关的公开技术资料，并结合部分内核源码进行核对。
 >
@@ -1762,30 +1762,30 @@ struct mount {
 ```
 下面看 `cat /mnt/a.txt` 的解析过程：
 
-- **Step 1：初始化起点**（绝对路径从进程 `root` 开始）
-    - `path = (rootfs_mnt, dentry("/"))`，即：`mnt = rootfs mount`，`dentry = rootfs` 的 `"/"`。
+**Step 1：初始化起点**（绝对路径从进程 `root` 开始）
+- `path = (rootfs_mnt, dentry("/"))`，即：`mnt = rootfs mount`，`dentry = rootfs` 的 `"/"`。
 
-- **Step 2：解析 `mnt`**
-    - 当前：`path = (rootfs_mnt, "/")`
-    - 取目录 inode：`dir_inode = d_inode(path.dentry)`
-    - 调用 lookup（示意 dcache 未命中，已准备好名称为 `"mnt"` 的 `child_dentry`）：`dir_inode->i_op->lookup(dir_inode, child_dentry, 0)`
-    - 得到：`child_dentry = dentry("mnt")`（属于 rootfs）
-    - 更新：`path = (rootfs_mnt, dentry("mnt"))`
+**Step 2：解析 `mnt`**
+- 当前：`path = (rootfs_mnt, "/")`
+- 取目录 inode：`dir_inode = d_inode(path.dentry)`
+- 调用 lookup（示意 dcache 未命中，已准备好名称为 `"mnt"` 的 `child_dentry`）：`dir_inode->i_op->lookup(dir_inode, child_dentry, 0)`
+- 得到：`child_dentry = dentry("mnt")`（属于 rootfs）
+- 更新：`path = (rootfs_mnt, dentry("mnt"))`
 
-- **Step 3：检查 mountpoint（关键）**
-    - 检查挂载点：`child_mnt = lookup_mnt(&path)`
-    - 查找 key：`(parent mount = rootfs_mnt, mountpoint dentry = dentry("/mnt"))`
-    - 命中后 crossing mount：`path.mnt = child_mnt`，`path.dentry = child_mnt->mnt_root`
-    - 结果：`path = (ext4_mnt, dentry("/"))`
-    - 注意：此时 `dentry` 已不再是 rootfs 的 `"mnt"`，而是 ext4 的 `"/"`；路径字符串逻辑仍是 `"/mnt"`，但 VFS 已切入新的 `super_block`。
+**Step 3：检查 mountpoint（关键）**
+- 检查挂载点：`child_mnt = lookup_mnt(&path)`
+- 查找 key：`(parent mount = rootfs_mnt, mountpoint dentry = dentry("/mnt"))`
+- 命中后 crossing mount：`path.mnt = child_mnt`，`path.dentry = child_mnt->mnt_root`
+- 结果：`path = (ext4_mnt, dentry("/"))`
+- 注意：此时 `dentry` 已不再是 rootfs 的 `"mnt"`，而是 ext4 的 `"/"`；路径字符串逻辑仍是 `"/mnt"`，但 VFS 已切入新的 `super_block`。
 
-- **Step 4：解析 `a.txt` 并得到最终 inode**
-    - 当前目录：`path = (ext4_mnt, "/")`
-    - 取当前目录 inode：`dir_inode = d_inode(path.dentry)`
-    - 在 ext4 根目录查找 `"a.txt"`（示意 dcache 未命中，已准备好名称为 `"a.txt"` 的 `child_dentry`）：`dir_inode->i_op->lookup(dir_inode, child_dentry, 0)`
-    - 得到：`child_dentry = dentry("a.txt")`，且 `child_dentry->d_inode = inode_of_a_txt`
-    - 更新：`path = (ext4_mnt, dentry("a.txt"))`
-    - 最终目标：`inode = d_inode(path.dentry)`，即 `inode = inode_of_a_txt`
+**Step 4：解析 `a.txt` 并得到最终 inode**
+- 当前目录：`path = (ext4_mnt, "/")`
+- 取当前目录 inode：`dir_inode = d_inode(path.dentry)`
+- 在 ext4 根目录查找 `"a.txt"`（示意 dcache 未命中，已准备好名称为 `"a.txt"` 的 `child_dentry`）：`dir_inode->i_op->lookup(dir_inode, child_dentry, 0)`
+- 得到：`child_dentry = dentry("a.txt")`，且 `child_dentry->d_inode = inode_of_a_txt`
+- 更新：`path = (ext4_mnt, dentry("a.txt"))`
+- 最终目标：`inode = d_inode(path.dentry)`，即 `inode = inode_of_a_txt`
 
 对应伪代码：
 

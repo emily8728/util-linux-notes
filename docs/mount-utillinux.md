@@ -1367,7 +1367,7 @@ cxt->has_selinux_opt = 1
 因此，`fix_optstr()` 的职责不能简单概括成“补全 option string”。
 更准确地说，它完成了两层工作：
 ```text
-                    fix_optstr()
+                    fix_optstr()
                          │
           ┌──────────────┴──────────────┐
           │                             │
@@ -2141,7 +2141,7 @@ PREP_OPTIONS
 因此，从这里开始，后面的实际挂载存在两条路线：
 
 ```text
-                         prepare_mount
+                         prepare_mount
                               │
                               ▼
                 mnt_context_prepare_helper()
@@ -2372,7 +2372,7 @@ if (cxt->helper)
 因此这里形成两条不同的实际挂载路径：
 
 ```text
-                         do_mount()
+                         do_mount()
                              │
               ┌──────────────┴──────────────┐
               │                             │
@@ -2595,7 +2595,7 @@ helper 根据 `-N` 重新取得这个 target namespace，并在相应 namespace 
 因此，`exec_helper()` 中需要特别处理的参数主要有三类：
 
 ```text
-                    libmount 已准备好的 context
+                    libmount 已准备好的 context
                                │
              ┌─────────────────┼──────────────────┐
              │                 │                  │
@@ -2977,7 +2977,7 @@ MOUNT_ATTR_*  → 描述需要设置的 VFS mount attributes
 `hook_mount` 会在`init_sysapi()` 里据此为后续的新 mount API 操作准备相应的 fd：
 
 ```text
-                         init_sysapi()
+                         init_sysapi()
                               │
           ┌───────────────────┼────────────────────┐
           │                   │                    │
@@ -3096,7 +3096,7 @@ path = mnt_fs_get_srcpath(cxt->fs);
 然后通过 `open_tree(source, ...)` 取得 mount tree。bind 与 move 的区别从这里开始：bind 使用 `OPEN_TREE_CLONE` 克隆 source 上的 mount tree，而 move 不使用 `OPEN_TREE_CLONE`，直接取得已有 mount tree。
 
 ```text
-                               PREP
+                               PREP
                                 │
                           init_sysapi()
                                 │
@@ -3178,7 +3178,7 @@ mount -o remount,ro /dev/sda1 /mnt
 **两种 remount 在新 API 中的执行流程如下：**
 
 ```text
-                          PREP
+                          PREP
                            │
                            ▼
                      init_sysapi()
@@ -3293,7 +3293,7 @@ unbindable
 它和 remount 一样，从 target 取得当前 mount tree：
 
 ```text
-                         PREP
+                         PREP
                           │
                     init_sysapi()
                           │
@@ -3959,7 +3959,7 @@ fsopen(fstype, ...)
 因此，`hook_create_mount()` 不再创建 filesystem context，而是使用这个已经存在的 `fd_fs` 完成 **配置 filesystem context → 创建 filesystem → 创建 mount tree** 的过程：
 
 ```text
-                    hook_create_mount()
+                    hook_create_mount()
                             │
                             ▼
        fsconfig(fd_fs, FSCONFIG_SET_STRING,
@@ -4068,7 +4068,7 @@ cxt->update->fs->id
 前面的 PREP 阶段中，`init_sysapi()` 已经通过 `open_tree(target)` 取得现有 mount，并保存到 `api->fd_tree`。进入 MOUNT 阶段后，`hook_reconfigure_mount()` 首先通过 `fspick()` 从这个 mount tree 取得 filesystem configuration context：
 
 ```text
-                 hook_reconfigure_mount()
+                 hook_reconfigure_mount()
                            │
                            ▼
        fspick(api->fd_tree, ...) → api->fd_fs
@@ -4130,7 +4130,7 @@ hook_set_vfsflags()
 对于普通新建 filesystem，`hook_create_mount()` 先通过 `fsmount()` 创建出 `api->fd_tree`，随后 `hook_set_vfsflags()` 使用这个 `fd_tree`，从 `cxt->optlist` 中取得需要设置和清除的 VFS mount attributes，最终通过 `mount_setattr()` 应用到这个 mount tree：
 
 ```text
-                hook_set_vfsflags()
+                hook_set_vfsflags()
                          │
                          ▼
           从 optlist 取得 VFS attributes
